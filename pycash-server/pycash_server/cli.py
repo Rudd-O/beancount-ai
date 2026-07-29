@@ -26,8 +26,7 @@ class Configuration(TypedDict):
     receipts_dir: str
     openwebui_url: str
     openwebui_token: str
-
-    openwebui_model: str  # optional key used in do_process
+    openwebui_model: str
 
 
 _cfg: Configuration | None = None  # cached config loaded from resolved path
@@ -104,7 +103,7 @@ def do_process(args: argparse.Namespace) -> None:
 
     cfg = get_cfg()
     receipts_dir = Path(cfg["receipts_dir"])
-    receipt_path = receipts_dir / args.filename
+    receipt_path = receipts_dir / os.path.basename(args.filename)
 
     if not receipt_path.is_file():
         print(
@@ -143,7 +142,7 @@ def do_process(args: argparse.Namespace) -> None:
     }
 
     resp = client.chat.completions.create(
-        model=cfg.get("openwebui_model", None),
+        model=cfg["openwebui_model"],
         messages=[{"role": "user", "content": [text_part, image_part]}],
     )
 
