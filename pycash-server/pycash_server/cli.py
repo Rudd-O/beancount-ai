@@ -14,8 +14,6 @@ import os
 import sys
 from pathlib import Path
 from typing import cast, TypedDict
-from openai.types.chat import ChatCompletionChunk
-from openai._streaming import Stream
 
 CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
 
@@ -97,8 +95,11 @@ def do_process(args: argparse.Namespace) -> None:
     import base64
     import ssl
 
+    from openai._streaming import Stream
+
     from openai.types.chat import (
         ChatCompletionContentPartImageParam,
+        ChatCompletionChunk,
         ChatCompletionContentPartTextParam,
     )
     from httpx import Client as HttpxClient
@@ -106,17 +107,20 @@ def do_process(args: argparse.Namespace) -> None:
 
     cfg = get_cfg()
     receipts_dir = Path(cfg["receipts_dir"])
-    receipt_path = receipts_dir / os.path.basename(args.filename)
+    fn = os.path.basename(args.filename)
 
-    if not receipt_path.is_file():
-        print(
-            json.dumps({"error": f"receipt not found: {receipt_path}"}), file=sys.stderr
-        )
-        sys.exit(1)
+    receipt_path = receipts_dir / fn
+
+    print(f"Reading {fn} from receipts directory", file=sys.stderr)
 
     prompt_text = _PROMPT_PATH.read_text()
 
-    raw = receipt_path.read_bytes()
+    try:
+        raw = receipt_path.read_bytes()
+    except OSError as e:
+        print(json.dumps({"error": f"cannot read {fn}: {e}"}), file=sys.stderr)
+        sys.exit(1)
+
     b64data = base64.b64encode(raw).decode("utf-8")
     mime_map = {
         ".jpg": "image/jpeg",

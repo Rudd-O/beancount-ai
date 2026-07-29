@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict, cast, IO
 
 
 CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
@@ -76,9 +76,9 @@ def get_cfg() -> Configuration:
 
 def _call_remote(
     action: str,
-    stdin_data: bytes = b"",
     arg: str | None = None,
-) -> subprocess.CompletedProcess[bytes]:
+) -> tuple[subprocess.Popen[bytes], IO[bytes], IO[bytes]]:
+    """Start a remote process and return its Popen handle (with all streams already connected)."""
     cfg = get_cfg()
     target_vm: str | None = cfg["target_vm"]
 
@@ -89,39 +89,62 @@ def _call_remote(
             cmd.extend([action, arg])
         else:
             cmd.append(action)
-        return subprocess.run(cmd, input=stdin_data, capture_output=True)
+    else:
+        cmd = ["qrexec-client-vm", str(target_vm), action]
 
-    cmd = ["qrexec-client-vm", str(target_vm), action]
-    return subprocess.run(cmd, input=stdin_data, capture_output=True)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+    return proc, proc.stdin, proc.stdout
 
 
 # -- subcommands -----------------------------------------------------------
 
 
 def do_list(_args: argparse.Namespace) -> None:
-    result = _call_remote("pycash.List")
-    if result.returncode != 0:
-        print(result.stderr.decode(), file=sys.stderr)
-        sys.exit(1)
+    proc, stdin, stdout = _call_remote("pycash.List")
+    stdin.close()
 
-    data = json.loads(result.stdout)
-    if "error" in data:
+    data = json.load(stdout)
+    if data.get("error"):
         print(data["error"], file=sys.stderr)
-        sys.exit(1)
+    else:
+        for fname in data["receipts"]:
+            print(fname)
 
-    for fname in data["receipts"]:
-        print(fname)
+    sys.exit(proc.wait())
 
 
 def do_process(args: argparse.Namespace) -> None:
-    result = _call_remote("pycash.Process", args.filename)
-    if result.returncode != 0:
-        print(result.stderr.decode(), file=sys.stderr)
-        sys.exit(1)
-    print(result.stdout.decode())
+    proc, stdin, stdout = _call_remote("pycash.Process", arg=args.filename)
+    stdin.close()
 
+    accumulated: list[str] = []
 
-# -- CLI -------------------------------------------------------------------
+    for line in stdout:
+        msg = json.loads(line)
+
+        reasoning_over = False
+        if err := msg.get("error"):
+            print(err, file=sys.stderr)
+            break
+        elif msg.get("finish"):
+            break
+        elif msg.get("reasoning"):
+            sys.stderr.write(msg["reasoning"])
+            sys.stderr.flush()
+        elif msg.get("output"):
+            if not reasoning_over:
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+                reasoning_over = True
+            accumulated.append(msg["output"])
+
+    ret = proc.wait()
+    if ret != 0:
+        sys.exit(ret)
+
+    print("".join(accumulated))
 
 
 def build_parser() -> argparse.ArgumentParser:
