@@ -94,11 +94,13 @@ _PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
 
 def do_process(args: argparse.Namespace) -> None:
     import base64
+    import ssl
 
     from openai.types.chat import (
         ChatCompletionContentPartImageParam,
         ChatCompletionContentPartTextParam,
     )
+    from httpx import Client as HttpxClient
     from openwebui_client import OpenWebUIClient
 
     cfg = get_cfg()
@@ -123,9 +125,17 @@ def do_process(args: argparse.Namespace) -> None:
     }
     mime_type = mime_map.get(receipt_path.suffix.lower(), "image/jpeg")
 
+    ssl_paths = ssl.get_default_verify_paths()
+    if ssl_paths.cafile:
+        verify = ssl_paths.cafile
+    else:
+        import certifi
+        verify = certifi.where()
+
     client = OpenWebUIClient(
         api_key=cfg["openwebui_token"],
         base_url=cfg["openwebui_url"],
+        http_client=HttpxClient(verify=verify),
     )
 
     text_part: ChatCompletionContentPartTextParam = {
