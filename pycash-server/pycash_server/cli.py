@@ -14,7 +14,8 @@ import os
 import sys
 from pathlib import Path
 from typing import cast, TypedDict
-
+from openai.types.chat import ChatCompletionChunk
+from openai._streaming import Stream
 
 CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
 
@@ -130,6 +131,7 @@ def do_process(args: argparse.Namespace) -> None:
         verify = ssl_paths.cafile
     else:
         import certifi
+
         verify = certifi.where()
 
     client = OpenWebUIClient(
@@ -154,16 +156,29 @@ def do_process(args: argparse.Namespace) -> None:
     resp = client.chat.completions.create(
         model=cfg["openwebui_model"],
         messages=[{"role": "user", "content": [text_part, image_part]}],
+        stream=True,
     )
 
-    content = cast(str, resp.choices[0].message.content)
-    print(content)
-
-
-def _b64(path: Path) -> str:
-    import base64
-
-    return base64.b64encode(path.read_bytes()).decode()
+    flush_every = 0
+    # This will emit one of three types of lines:
+    # {"reasoning": "reasoning text chunk"}
+    # {"output": "output text chunk"}
+    # {"finish":" finish reason"} (usually "stop")
+    for chunk in cast(Stream[ChatCompletionChunk], resp):
+        choice = chunk.choices[0]
+        delta = choice.delta
+        if hasattr(delta, "reasoning_content") and delta.reasoning_content is not None:  # type:ignore
+            json.dump({"reasoning": delta.reasoning_content}, sys.stdout)  # type:ignore
+            sys.stdout.write("\n")
+        elif delta.content is not None:
+            json.dump({"output": delta.content}, sys.stdout)
+            sys.stdout.write("\n")
+        elif choice.finish_reason is not None:
+            json.dump({"finish": choice.finish_reason}, sys.stdout)
+            sys.stdout.write("\n")
+        flush_every += 1
+        if flush_every % 10 == 0:
+            sys.stdout.flush()
 
 
 # -- CLI -------------------------------------------------------------------
