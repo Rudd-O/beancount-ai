@@ -77,13 +77,18 @@ def get_cfg() -> Configuration:
 def _call_remote(
     action: str,
     stdin_data: bytes = b"",
+    arg: str | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     cfg = get_cfg()
     target_vm: str | None = cfg["target_vm"]
 
     # Local fallback for testing: when target_vm is None, invoke pycash-server directly.
     if target_vm is None:
-        cmd = ["pycash-server"] + ["--config", str(_cfg_path)] + [action]
+        cmd = ["pycash-server", "--config", str(_cfg_path)]
+        if arg is not None:
+            cmd.extend([action, arg])
+        else:
+            cmd.append(action)
         return subprocess.run(cmd, input=stdin_data, capture_output=True)
 
     cmd = ["qrexec-client-vm", str(target_vm), action]
@@ -94,10 +99,7 @@ def _call_remote(
 
 
 def do_list(_args: argparse.Namespace) -> None:
-    prefix = "pycash"
-    action = f"{prefix}.List"
-
-    result = _call_remote(action)
+    result = _call_remote("pycash.List")
     if result.returncode != 0:
         print(result.stderr.decode(), file=sys.stderr)
         sys.exit(1)
@@ -109,6 +111,14 @@ def do_list(_args: argparse.Namespace) -> None:
 
     for fname in data["receipts"]:
         print(fname)
+
+
+def do_process(args: argparse.Namespace) -> None:
+    result = _call_remote("pycash.Process", args.filename)
+    if result.returncode != 0:
+        print(result.stderr.decode(), file=sys.stderr)
+        sys.exit(1)
+    print(result.stdout.decode())
 
 
 # -- CLI -------------------------------------------------------------------
@@ -130,6 +140,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp.add_parser("list", help="Get receipt filenames to import (plain text)")
 
+    process_cmd = sp.add_parser(
+        "process", help="Process a receipt image via Open-WebUI"
+    )
+    process_cmd.add_argument(
+        "filename", help="Filename of the receipt file in receipts_dir"
+    )
+
     return ap
 
 
@@ -145,7 +162,7 @@ def main() -> None:
         ap.print_help(sys.stderr)
         sys.exit(1)
 
-    dispatch = {"list": do_list}
+    dispatch = {"list": do_list, "process": do_process}  # type:ignore
     dispatch[args.command](args)
 
 
