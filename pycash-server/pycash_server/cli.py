@@ -81,7 +81,13 @@ def do_list(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     files = sorted(
-        str(p.name) for p in src.rglob("*") if p.is_file() and p.suffix.lower() in _EXT
+        (
+            e.name
+            for e in os.scandir(src)
+            if e.is_file(follow_symlinks=False)
+            and any(e.name.lower().endswith(ext) for ext in _EXT)
+        ),
+        key=lambda n: (src / n).stat().st_mtime,
     )
     print(json.dumps({"receipts": files, "count": len(files)}))
 
