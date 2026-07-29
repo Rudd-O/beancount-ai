@@ -1,0 +1,22 @@
+
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pycash-server"
+version = "0.1.0"
+description = "Help import cash receipts into Beancount via Open-WebUI LLM"
+requires-python = ">=3.10"
+dependencies = [
+    "openwebui-client",
+]
+
+[project.scripts]
+pycash-server = "pycash_server.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pycash_server"]
+
+[tool.setuptools.package-data]
+"pycash_server" = ["*.md"]

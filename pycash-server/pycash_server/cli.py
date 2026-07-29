@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""pycash-server — qrexec RPC service for receipt processing (runs on pym).
+
+Subcommands:
+    list    List receipt filenames to import (JSON output)
+
+Config is read from ~/.config/pycash.json unless overridden.
+As a qrexec service, it reads nothing from stdin and only writes structured results to stdout.
+"""
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import cast, TypedDict
+
+
+CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
+
+
+# -- configuration ---------------------------------------------------------
+
+
+class Configuration(TypedDict):
+    receipts_dir: str
+    openwebui_url: str
+    openwebui_token: str
+
+    openwebui_model: str  # optional key used in do_process
+
+
+_cfg: Configuration | None = None  # cached config loaded from resolved path
+_cfg_path: Path | None = None  # which file was actually loaded
+
+_cfg_override: str | None = None  # set by --config before get_cfg() is called
+
+
+def _get_cfg_path(override: str | None) -> Path:
+    """Return the config file path, resolving overrides in order of priority.
+
+    Priority (highest → lowest):
+        1. ``--config`` CLI argument
+        2. ``PYCASH_CONFIG`` environment variable
+        3. Default ``~/.config/pycash.json``
+    """
+    if override:
+        return Path(override)
+    env_cfg = os.environ.get("PYCASH_CONFIG")
+    if env_cfg:
+        return Path(env_cfg)
+    return CONF_DEFAULT
+
+
+def get_cfg() -> Configuration:
+    """Load and cache the config from the resolved path.
+
+    If called multiple times, only the *first* invocation's resolution is used;
+    subsequent calls return the cached result (prevents a user from accidentally
+    reloading with different paths within one process).
+    """
+    global _cfg, _cfg_path
+    if _cfg is not None:
+        return _cfg
+
+    fp = _get_cfg_path(_cfg_override)
+    with open(fp) as fh:
+        _cfg = cast(Configuration, json.load(fh))
+    _cfg_path = fp
+    return _cfg
+
+
+# -- subcommands -----------------------------------------------------------
+
+_EXT = frozenset((".jpg", ".jpeg", ".png", ".pdf"))
+
+
+def do_list(args: argparse.Namespace) -> None:
+    cfg = get_cfg()
+    src = Path(cfg["receipts_dir"])
+    if not src.is_dir():
+        print(json.dumps({"error": f"no such dir: {src}"}), file=sys.stderr)
+        sys.exit(1)
+
+    files = sorted(
+        str(p.name) for p in src.rglob("*") if p.is_file() and p.suffix.lower() in _EXT
+    )
+    print(json.dumps({"receipts": files, "count": len(files)}))
+
+
+# -- subcommands -----------------------------------------------------------
+
+_PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
+
+
+def do_process(args: argparse.Namespace) -> None:
+    import base64
+
+    from openai.types.chat import (
+        ChatCompletionContentPartImageParam,
+        ChatCompletionContentPartTextParam,
+    )
+    from openwebui_client import OpenWebUIClient
+
+    cfg = get_cfg()
+    receipts_dir = Path(cfg["receipts_dir"])
+    receipt_path = receipts_dir / args.filename
+
+    if not receipt_path.is_file():
+        print(
+            json.dumps({"error": f"receipt not found: {receipt_path}"}), file=sys.stderr
+        )
+        sys.exit(1)
+
+    prompt_text = _PROMPT_PATH.read_text()
+
+    raw = receipt_path.read_bytes()
+    b64data = base64.b64encode(raw).decode("utf-8")
+    mime_map = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".pdf": "application/pdf",
+    }
+    mime_type = mime_map.get(receipt_path.suffix.lower(), "image/jpeg")
+
+    client = OpenWebUIClient(
+        api_key=cfg["openwebui_token"],
+        base_url=cfg["openwebui_url"],
+    )
+
+    text_part: ChatCompletionContentPartTextParam = {
+        "type": "text",
+        "text": prompt_text,
+    }
+
+    image_part: ChatCompletionContentPartImageParam = {
+        "type": "image_url",
+        "image_url": {
+            "url": f"data:{mime_type};base64,{b64data}",
+            "detail": "high",
+        },
+    }
+
+    resp = client.chat.completions.create(
+        model=cfg.get("openwebui_model", None),
+        messages=[{"role": "user", "content": [text_part, image_part]}],
+    )
+
+    content = cast(str, resp.choices[0].message.content)
+    print(content)
+
+
+def _b64(path: Path) -> str:
+    import base64
+
+    return base64.b64encode(path.read_bytes()).decode()
+
+
+# -- CLI -------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="pycash-server",
+        description="qrexec RPC service for pycash",
+    )
+    ap.add_argument(
+        "--config",
+        "-c",
+        default=None,
+        dest="conf_path",
+        help="Path to the config file; overrides $PYCASH_CONFIG and the default",
+    )
+
+    sp = ap.add_subparsers(dest="command")
+
+    sp.add_parser("pycash.List", help="List receipt filenames to import (JSON)")
+
+    process_cmd = sp.add_parser(
+        "pycash.Process", help="Process a receipt image via Open-WebUI"
+    )
+    process_cmd.add_argument(
+        "filename", help="Filename of the receipt file in receipts_dir"
+    )
+
+    return ap
+
+
+def main() -> None:
+    import sys
+
+    global _cfg_override  # override resolved by --config before any get_cfg() call
+    ap = build_parser()
+    args = ap.parse_args()
+
+    if not args.command:
+        ap.print_help(sys.stderr)
+        sys.exit(1)
+
+    _cfg_override = args.conf_path  # set it once for downstream calls to get_cfg()
+    _cfg = None  # ensure fresh start if already cached (reload from --config path)
+
+    dispatch = {"pycash.List": do_list, "pycash.Process": do_process}
+    handler = dispatch.get(args.command)
+    if handler is None:
+        ap.print_help(sys.stderr)
+        sys.exit(1)
+    handler(args)
+
+
+if __name__ == "__main__":
+    main()
