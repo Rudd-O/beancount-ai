@@ -2,3 +2,4 @@ test-config.json
 dist
 *.egg-info
 *.whl
+*.pyc
