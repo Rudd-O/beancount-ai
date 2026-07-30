@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import cast, TypedDict
 
+from .pdf import render_pdf_pages_to_png
+
 CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
 
 
@@ -107,6 +109,7 @@ def do_process(args: argparse.Namespace) -> None:
         ChatCompletionContentPartImageParam,
         ChatCompletionChunk,
         ChatCompletionContentPartTextParam,
+        ChatCompletionMessageParam,
     )
     from httpx import Client as HttpxClient
     from openwebui_client import OpenWebUIClient
@@ -127,14 +130,7 @@ def do_process(args: argparse.Namespace) -> None:
         print(json.dumps({"error": f"cannot read {fn}: {e}"}), file=sys.stderr)
         sys.exit(1)
 
-    b64data = base64.b64encode(raw).decode("utf-8")
-    mime_map = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".pdf": "application/pdf",
-    }
-    mime_type = mime_map.get(receipt_path.suffix.lower(), "image/jpeg")
+    suffix = Path(fn).suffix.lower()
 
     ssl_paths = ssl.get_default_verify_paths()
     if ssl_paths.cafile:
@@ -155,17 +151,56 @@ def do_process(args: argparse.Namespace) -> None:
         "text": prompt_text,
     }
 
-    image_part: ChatCompletionContentPartImageParam = {
-        "type": "image_url",
-        "image_url": {
-            "url": f"data:{mime_type};base64,{b64data}",
-            "detail": "high",
-        },
-    }
+    image_parts: list[ChatCompletionContentPartImageParam] = []
+
+    if suffix == ".pdf":
+        print("PDF detected; converting pages to PNG...", file=sys.stderr)
+        try:
+            page_infos: list[tuple[int, float, int]] = []
+            for page_num, dpi_used, png_bytes in render_pdf_pages_to_png(raw):
+                b64data = base64.b64encode(png_bytes).decode("utf-8")
+                image_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{b64data}",
+                            "detail": "high",
+                        },
+                    }
+                )
+                page_infos.append((page_num, dpi_used, len(png_bytes)))
+        except Exception as e:
+            print(json.dumps({"error": f"PDF rendering failed: {e}"}), file=sys.stderr)
+            sys.exit(1)
+        for pnum, dpi_used, nbytes in page_infos:
+            print(
+                f"  Page {pnum}: {nbytes} bytes @ {dpi_used:.0f} DPI", file=sys.stderr
+            )
+    else:
+        b64data = base64.b64encode(raw).decode("utf-8")
+        mime_map = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+        }
+        mime_type = mime_map.get(suffix, "image/jpeg")
+        image_parts.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime_type};base64,{b64data}",
+                    "detail": "high",
+                },
+            }
+        )
+
+    messages: list[ChatCompletionMessageParam] = [
+        {"role": "user", "content": [text_part, *image_parts]}
+    ]
 
     resp = client.chat.completions.create(
         model=cfg["openwebui_model"],
-        messages=[{"role": "user", "content": [text_part, image_part]}],
+        messages=messages,
         stream=True,
     )
 
