@@ -9,11 +9,13 @@ As a qrexec service, it reads nothing from stdin and only writes structured resu
 """
 
 import argparse
+import datetime
 import json
 import os
 import sys
 from pathlib import Path
 from typing import cast, TypedDict
+from webdav4.client import Client  # type:ignore
 
 from .pdf import render_pdf_pages_to_png
 
@@ -24,10 +26,15 @@ CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
 
 
 class Configuration(TypedDict):
-    receipts_dir: str
+    receipts_dir: str  # deprecated — use WebDAV fields for new configs
     openwebui_url: str
     openwebui_token: str
     openwebui_model: str
+
+    # WebDAV credentials (preferred over receipts_dir for new configs)
+    receipts_url: str | None
+    receipts_username: str | None
+    receipts_password: str | None
 
 
 _cfg: Configuration | None = None  # cached config loaded from resolved path
@@ -77,21 +84,54 @@ _EXT = frozenset((".jpg", ".jpeg", ".png", ".pdf"))
 
 def do_list(args: argparse.Namespace) -> None:
     cfg = get_cfg()
-    src = Path(cfg["receipts_dir"])
-    if not src.is_dir():
-        print(json.dumps({"error": f"no such dir: {src}"}), file=sys.stderr)
+
+    url = cfg.get("receipts_url")
+    username = cfg.get("receipts_username")
+    password = cfg.get("receipts_password")
+
+    if not (url and username and password):
+        print(
+            json.dumps({"error": "missing WebDAV credentials in config"}),
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    files = sorted(
-        (
-            e.name
-            for e in os.scandir(src)
-            if e.is_file(follow_symlinks=False)
-            and any(e.name.lower().endswith(ext) for ext in _EXT)
-        ),
-        key=lambda n: (src / n).stat().st_mtime,
+    client = Client(url, auth=(username, password))
+
+    class ItemListing(TypedDict):
+        name: str
+        content_length: int | None
+        modified: datetime.datetime
+
+    try:
+        items = cast(list[ItemListing], client.ls("/", detail=True))
+    except Exception as e:
+        print(json.dumps({"error": f"WebDAV list failed: {e}"}), file=sys.stderr)
+        sys.exit(1)
+
+    files: list[ItemListing] = []
+    for item in items:
+        name = item["name"]
+        if not any(name.lower().endswith(ext) for ext in _EXT):
+            continue
+        files.append(
+            {
+                "name": name,
+                "content_length": item["content_length"],
+                "modified": item["modified"],
+            }
+        )
+
+    files.sort(key=lambda f: f["modified"])
+
+    print(
+        json.dumps(
+            {
+                "receipts": [f["name"] for f in files],
+                "count": len(files),
+            }
+        )
     )
-    print(json.dumps({"receipts": files, "count": len(files)}))
 
 
 # -- subcommands -----------------------------------------------------------
@@ -115,18 +155,31 @@ def do_process(args: argparse.Namespace) -> None:
     from openwebui_client import OpenWebUIClient
 
     cfg = get_cfg()
-    receipts_dir = Path(cfg["receipts_dir"])
+
+    url = cfg.get("receipts_url")
+    username = cfg.get("receipts_username")
+    password = cfg.get("receipts_password")
+
+    if not (url and username and password):
+        print(
+            json.dumps({"error": "missing WebDAV credentials in config"}),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     fn = os.path.basename(args.filename)
+    webdav_client = Client(url, auth=(username, password))
 
-    receipt_path = receipts_dir / fn
+    receipt_path = f"/{fn}"
 
-    print(f"Reading {fn} from receipts directory", file=sys.stderr)
+    print(f"Reading {fn} from WebDAV receipts URL", file=sys.stderr)
 
     prompt_text = _PROMPT_PATH.read_text()
 
     try:
-        raw = receipt_path.read_bytes()
-    except OSError as e:
+        with webdav_client.open(receipt_path, "rb") as remote_file:
+            raw: bytes = remote_file.read()  # type: ignore
+    except Exception as e:
         print(json.dumps({"error": f"cannot read {fn}: {e}"}), file=sys.stderr)
         sys.exit(1)
 
