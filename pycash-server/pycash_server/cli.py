@@ -136,6 +136,40 @@ def do_list(args: argparse.Namespace) -> None:
 
 # -- subcommands -----------------------------------------------------------
 
+
+def do_fetch(args: argparse.Namespace) -> None:
+    cfg = get_cfg()
+
+    url = cfg.get("receipts_url")
+    username = cfg.get("receipts_username")
+    password = cfg.get("receipts_password")
+
+    if not (url and username and password):
+        print(
+            json.dumps({"error": "missing WebDAV credentials in config"}),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
+    webdav_client = Client(url, auth=(username, password))
+    receipt_path = f"/{fn}"
+
+    print(f"Fetching {fn} from WebDAV receipts URL", file=sys.stderr)
+
+    try:
+        with webdav_client.open(receipt_path, "rb") as remote_file:
+            raw: bytes = remote_file.read()  # type: ignore
+    except Exception as e:
+        print(json.dumps({"error": f"cannot read {fn}: {e}"}), file=sys.stderr)
+        sys.exit(1)
+
+    sys.stdout.buffer.write(raw)
+    sys.stdout.buffer.flush()
+
+
+# -- subcommands -----------------------------------------------------------
+
 _PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
 
 
@@ -300,6 +334,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp.add_parser("pycash.List", help="List receipt filenames to import (JSON)")
 
+    fetch_cmd = sp.add_parser(
+        "pycash.Fetch", help="Write the raw contents of a receipt file to stdout"
+    )
+    fetch_cmd.add_argument(
+        "filename",
+        help="Filename of the receipt file in receipts_dir (encoded as hex)",
+    )
+
     process_cmd = sp.add_parser(
         "pycash.Process", help="Process a receipt image via Open-WebUI"
     )
@@ -325,11 +367,12 @@ def main() -> None:
     _cfg_override = args.conf_path  # set it once for downstream calls to get_cfg()
     _cfg = None  # ensure fresh start if already cached (reload from --config path)
 
-    dispatch = {"pycash.List": do_list, "pycash.Process": do_process}
+    dispatch = {"pycash.List": do_list, "pycash.Fetch": do_fetch, "pycash.Process": do_process}
     handler = dispatch.get(args.command)
     if handler is None:
         ap.print_help(sys.stderr)
         sys.exit(1)
+
     handler(args)
 
 

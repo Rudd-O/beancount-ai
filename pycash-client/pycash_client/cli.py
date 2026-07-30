@@ -181,6 +181,19 @@ def process(filename: str) -> tuple[str, str]:
     return llm_output, account
 
 
+def do_fetch(args: argparse.Namespace) -> None:
+    cmd, proc, stdin, stdout = _call_remote("pycash.Fetch", arg=args.filename)
+    stdin.close()
+
+    raw = stdout.read()
+    ret = proc.wait()
+
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
+
+    Path(args.destination).write_bytes(raw)
+
+
 def do_process(args: argparse.Namespace) -> None:
     try:
         llm_output, account = process(args.filename)
@@ -214,6 +227,16 @@ def build_parser() -> argparse.ArgumentParser:
         "filename", help="Filename of the receipt file in receipts_dir"
     )
 
+    fetch_cmd = sp.add_parser(
+        "fetch", help="Fetch a receipt file from the server"
+    )
+    fetch_cmd.add_argument(
+        "filename", help="Filename of the receipt file in receipts_dir"
+    )
+    fetch_cmd.add_argument(
+        "destination", help="Local path to save the retrieved file"
+    )
+
     return ap
 
 
@@ -229,7 +252,7 @@ def main() -> None:
         ap.print_help(sys.stderr)
         sys.exit(1)
 
-    dispatch = {"list": do_list, "process": do_process}  # type:ignore
+    dispatch = {"list": do_list, "fetch": do_fetch, "process": do_process}  # type:ignore
     dispatch[args.command](args)
 
 
