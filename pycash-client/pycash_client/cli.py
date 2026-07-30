@@ -24,6 +24,9 @@ CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
 
 class Configuration(TypedDict):
     target_vm: str | None
+    beancount_folder: str
+    beancount_main_file: str
+    beancount_transaction_destination_file: str
 
 
 _cfg: Configuration | None = None
@@ -108,7 +111,7 @@ def _call_remote(
 
 
 def do_list(_args: argparse.Namespace) -> None:
-    cmd, proc, stdin, stdout = _call_remote("pycash.List")
+    _, proc, stdin, stdout = _call_remote("pycash.List")
     stdin.close()
 
     try:
@@ -181,17 +184,34 @@ def process(filename: str) -> tuple[str, str]:
     return llm_output, account
 
 
-def do_fetch(args: argparse.Namespace) -> None:
-    cmd, proc, stdin, stdout = _call_remote("pycash.Fetch", arg=args.filename)
+def fetch(filename: str) -> bytes:
+    cmd, proc, stdin, stdout = _call_remote("pycash.Fetch", arg=filename)
     stdin.close()
 
     raw = stdout.read()
     ret = proc.wait()
-
     if ret != 0:
         raise subprocess.CalledProcessError(ret, cmd)
 
-    Path(args.destination).write_bytes(raw)
+    return raw
+
+
+def organize_receipt(filename: str, account: str) -> Path:
+    cfg = get_cfg()
+
+    raw = fetch(filename)
+
+    # Construct the final destination folder.  Account folders reside directly under `beancount_folder`.
+    receipt_dir = Path(cfg["beancount_folder"]) / account.replace(":", "/")
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    receipt_path = receipt_dir / filename
+    receipt_path.write_bytes(raw)
+
+    return receipt_path
+
+
+def do_fetch(args: argparse.Namespace) -> None:
+    Path(args.destination).write_bytes(fetch(args.filename))
 
 
 def do_process(args: argparse.Namespace) -> None:
@@ -202,6 +222,11 @@ def do_process(args: argparse.Namespace) -> None:
 
     print(llm_output)
     print(f"Main account: {account}")
+
+
+def do_organize(args: argparse.Namespace) -> None:
+    receipt_path = organize_receipt(args.filename, args.account)
+    print("The file has been organized into", str(receipt_path), file=sys.stderr)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -227,15 +252,17 @@ def build_parser() -> argparse.ArgumentParser:
         "filename", help="Filename of the receipt file in receipts_dir"
     )
 
-    fetch_cmd = sp.add_parser(
-        "fetch", help="Fetch a receipt file from the server"
-    )
+    fetch_cmd = sp.add_parser("fetch", help="Fetch a receipt file from the server")
     fetch_cmd.add_argument(
         "filename", help="Filename of the receipt file in receipts_dir"
     )
-    fetch_cmd.add_argument(
-        "destination", help="Local path to save the retrieved file"
+    fetch_cmd.add_argument("destination", help="Local path to save the retrieved file")
+
+    org_cmd = sp.add_parser("organize", help="File a receipt under a payment account")
+    org_cmd.add_argument(
+        "filename", help="Filename of the receipt file in receipts_dir"
     )
+    org_cmd.add_argument("account", help="Payment account (e.g. Assets:Cash:CHF)")
 
     return ap
 
@@ -252,7 +279,12 @@ def main() -> None:
         ap.print_help(sys.stderr)
         sys.exit(1)
 
-    dispatch = {"list": do_list, "fetch": do_fetch, "process": do_process}  # type:ignore
+    dispatch = {
+        "list": do_list,
+        "fetch": do_fetch,
+        "organize": do_organize,
+        "process": do_process,
+    }  # type:ignore
     dispatch[args.command](args)
 
 
