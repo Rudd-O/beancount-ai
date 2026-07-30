@@ -77,7 +77,7 @@ def get_cfg() -> Configuration:
 def _call_remote(
     action: str,
     arg: str | None = None,
-) -> tuple[subprocess.Popen[bytes], IO[bytes], IO[bytes]]:
+) -> tuple[list[str], subprocess.Popen[bytes], IO[bytes], IO[bytes]]:
     """Start a remote process and return its Popen handle (with all streams already connected)."""
     cfg = get_cfg()
     target_vm: str | None = cfg["target_vm"]
@@ -101,14 +101,14 @@ def _call_remote(
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     assert proc.stdin is not None
     assert proc.stdout is not None
-    return proc, proc.stdin, proc.stdout
+    return cmd, proc, proc.stdin, proc.stdout
 
 
 # -- subcommands -----------------------------------------------------------
 
 
 def do_list(_args: argparse.Namespace) -> None:
-    proc, stdin, stdout = _call_remote("pycash.List")
+    cmd, proc, stdin, stdout = _call_remote("pycash.List")
     stdin.close()
 
     try:
@@ -124,8 +124,12 @@ def do_list(_args: argparse.Namespace) -> None:
     sys.exit(proc.wait())
 
 
-def do_process(args: argparse.Namespace) -> None:
-    proc, stdin, stdout = _call_remote("pycash.Process", arg=args.filename)
+def process(filename: str) -> tuple[str, str]:
+    """
+    Calls upon the LLM on the server side to produce a Beancount transaction
+    and the main payment account.
+    """
+    cmd, proc, stdin, stdout = _call_remote("pycash.Process", arg=filename)
     stdin.close()
 
     accumulated: list[str] = []
@@ -153,9 +157,38 @@ def do_process(args: argparse.Namespace) -> None:
 
     ret = proc.wait()
     if ret != 0:
-        sys.exit(ret)
+        raise subprocess.CalledProcessError(ret, cmd)
 
-    print("".join(accumulated))
+    llm_output = "".join(accumulated).strip()
+
+    # Fish out the last line...
+    llm_output_lines = llm_output.splitlines(True)
+    last_line = llm_output_lines[-1]
+    # ...then rejoin the prior lines.
+    llm_output = "".join(llm_output_lines[:-1]).strip()
+
+    # Remove Markdown quote formatting from Beancount transaction.
+    llm_output_lines = llm_output.splitlines(True)
+    if llm_output_lines[0].startswith("```"):
+        llm_output_lines = llm_output_lines[1:]
+    if llm_output_lines[-1].startswith("```"):
+        llm_output_lines = llm_output_lines[:-1]
+    llm_output = "".join(llm_output_lines)
+
+    # Fish out first account in the payment accounts list.
+    account = json.loads(last_line)[0]
+
+    return llm_output, account
+
+
+def do_process(args: argparse.Namespace) -> None:
+    try:
+        llm_output, account = process(args.filename)
+    except subprocess.CalledProcessError as e:
+        sys.exit(e.returncode)
+
+    print(llm_output)
+    print(f"Main account: {account}")
 
 
 def build_parser() -> argparse.ArgumentParser:
