@@ -82,6 +82,10 @@ def _call_remote(
     cfg = get_cfg()
     target_vm: str | None = cfg["target_vm"]
 
+    if arg is not None:
+        # arguments must be hex
+        arg = arg.encode("utf-8").hex()
+
     # Local fallback for testing: when target_vm is None, invoke pycash-server directly.
     if target_vm is None:
         cmd = ["pycash-server", "--config", str(_cfg_path)]
@@ -90,6 +94,8 @@ def _call_remote(
         else:
             cmd.append(action)
     else:
+        if arg is not None:
+            action = f"{action}+{arg}"
         cmd = ["qrexec-client-vm", str(target_vm), action]
 
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
@@ -105,12 +111,15 @@ def do_list(_args: argparse.Namespace) -> None:
     proc, stdin, stdout = _call_remote("pycash.List")
     stdin.close()
 
-    data = json.load(stdout)
-    if data.get("error"):
-        print(data["error"], file=sys.stderr)
-    else:
-        for fname in data["receipts"]:
-            print(fname)
+    try:
+        data = json.load(stdout)
+        if data.get("error"):
+            print(data["error"], file=sys.stderr)
+        else:
+            for fname in data["receipts"]:
+                print(fname)
+    except Exception as e:
+        print(f"cannot decode server response: {e}", file=sys.stderr)
 
     sys.exit(proc.wait())
 
@@ -121,10 +130,10 @@ def do_process(args: argparse.Namespace) -> None:
 
     accumulated: list[str] = []
 
+    reasoning_over = False
     for line in stdout:
         msg = json.loads(line)
 
-        reasoning_over = False
         if err := msg.get("error"):
             print(err, file=sys.stderr)
             break
@@ -139,6 +148,8 @@ def do_process(args: argparse.Namespace) -> None:
                 sys.stderr.flush()
                 reasoning_over = True
             accumulated.append(msg["output"])
+        else:
+            assert 0, msg
 
     ret = proc.wait()
     if ret != 0:

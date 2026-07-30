@@ -167,7 +167,8 @@ def do_process(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    fn = os.path.basename(args.filename)
+    argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
+    fn = os.path.basename(argsfilename)
     webdav_client = Client(url, auth=(username, password))
 
     receipt_path = f"/{fn}"
@@ -303,7 +304,8 @@ def build_parser() -> argparse.ArgumentParser:
         "pycash.Process", help="Process a receipt image via Open-WebUI"
     )
     process_cmd.add_argument(
-        "filename", help="Filename of the receipt file in receipts_dir"
+        "filename",
+        help="Filename of the receipt file in receipts_dir (encoded as hex)",
     )
 
     return ap
