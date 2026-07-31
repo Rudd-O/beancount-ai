@@ -183,13 +183,7 @@ def process_receipt(filename: str) -> tuple[str, str]:
     llm_output = "".join(accumulated).strip()
     llm_output_original = llm_output
 
-    # Fish out the last line...
-    llm_output_lines = llm_output.splitlines(True)
-    last_line = llm_output_lines[-1]
-    # ...then rejoin the prior lines.
-    llm_output = "".join(llm_output_lines[:-1]).strip()
-
-    # Remove Markdown quote formatting from Beancount transaction.
+    # Remove Markdown quote formatting from JSON output.
     llm_output_lines = llm_output.splitlines(True)
     if llm_output_lines[0].startswith("```"):
         llm_output_lines = llm_output_lines[1:]
@@ -199,13 +193,27 @@ def process_receipt(filename: str) -> tuple[str, str]:
 
     # Fish out first account in the payment accounts list.
     try:
-        account = json.loads(last_line)[0]
-    except json.decoder.JSONDecodeError:
+        data = json.loads(llm_output)
+    except json.decoder.JSONDecodeError as e:
         raise Exception(
-            f"Failed decoding expected JSON at end of string:\n{llm_output_original}"
+            f"Failed decoding expected JSON at end of string: {e}\n{llm_output_original}"
         )
 
-    return llm_output, account
+    try:
+        payment_account = data["payment_accounts"][0]
+    except Exception as e:
+        raise Exception(
+            f"Could not retrieve expense account from LLM output: {e}\n{llm_output_original}"
+        )
+
+    try:
+        transaction = data["transaction"]
+    except Exception as e:
+        raise Exception(
+            f"Could not retrieve Beancount transaction from LLM output: {e}\n{llm_output_original}"
+        )
+
+    return transaction, payment_account
 
 
 def fetch_receipt(filename: str) -> bytes:
