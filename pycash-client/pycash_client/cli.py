@@ -264,6 +264,28 @@ def organize_receipt(
     return receipt_path
 
 
+def insert_document_metadata(transaction_text: str, file_path: str) -> str:
+    lines = transaction_text.splitlines(True)
+    if not lines or lines[0].strip().startswith("#"):
+        return transaction_text
+    stripped = lines[1].lstrip()
+    indent = lines[1][: len(lines[1]) - len(stripped)]
+    lines.insert(1, '{}document: "{}"\n'.format(indent, file_path.replace('"', '\\"')))
+    return "".join(lines)
+
+
+def _preview_receipt(filename: str, preview_dir: Path) -> None:
+    dest_path = preview_dir / filename
+    dest_path.write_bytes(fetch_receipt(filename))
+    subprocess.Popen(
+        ["xdg-open", str(dest_path)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 def do_list(_args: argparse.Namespace) -> None:
     for fname in list_receipts():
         print(fname)
@@ -291,28 +313,6 @@ def do_process(args: argparse.Namespace) -> None:
 
     print(llm_output)
     print(f"Main account: {account}")
-
-
-def insert_document_metadata(transaction_text: str, file_path: str) -> str:
-    lines = transaction_text.splitlines(True)
-    if not lines or lines[0].strip().startswith("#"):
-        return transaction_text
-    stripped = lines[1].lstrip()
-    indent = lines[1][: len(lines[1]) - len(stripped)]
-    lines.insert(1, '{}document: "{}"\n'.format(indent, file_path.replace('"', '\\"')))
-    return "".join(lines)
-
-
-def _preview_receipt(filename: str, preview_dir: Path) -> None:
-    dest_path = preview_dir / filename
-    dest_path.write_bytes(fetch_receipt(filename))
-    subprocess.Popen(
-        ["xdg-open", str(dest_path)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
 
 
 def do_import(args: argparse.Namespace) -> None:
@@ -393,7 +393,7 @@ def do_ingest(args: argparse.Namespace) -> None:
             try:
                 do_import(argparse.Namespace(filename=receipt))
             except Exception as e:
-                print(f"Ingestion failed for '{receipt}': {e}", file=sys.stderr)
+                print(f"Import of {receipt} failed: {e}", file=sys.stderr)
                 sys.exit(1)
 
             # Remove from WebDAV only after successful import.
@@ -401,7 +401,7 @@ def do_ingest(args: argparse.Namespace) -> None:
                 do_remove(argparse.Namespace(filename=receipt))
             except subprocess.CalledProcessError as e:
                 print(
-                    f"Could not remove '{receipt}' from WebDAV (exit {e.returncode})",
+                    f"Could not remove {receipt} from WebDAV (exit {e.returncode})",
                     file=sys.stderr,
                 )
                 sys.exit(e.returncode)
