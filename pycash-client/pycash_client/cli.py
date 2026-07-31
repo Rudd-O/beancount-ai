@@ -228,7 +228,7 @@ def fetch_receipt(filename: str) -> bytes:
     return raw
 
 
-def organize_receipt(
+def predict_receipt_destination_path(
     transaction_date: date,
     filename: str,
     account: str,
@@ -242,8 +242,6 @@ def organize_receipt(
     the requisite transaction date at the beginning of the file name.
     """
     cfg = get_cfg()
-
-    raw = fetch_receipt(filename)
 
     # Construct the final destination folder.  Account folders reside directly under `beancount_folder`.
     receipt_dir = Path(cfg["beancount_folder"]) / account.replace(":", "/")
@@ -259,8 +257,28 @@ def organize_receipt(
     fn = shorten_fn(receipt_dir, fn)
 
     receipt_path = receipt_dir / fn
-    receipt_path.write_bytes(raw)
 
+    return receipt_path
+
+
+def organize_receipt(
+    transaction_date: date,
+    filename: str,
+    account: str,
+    description: str | None = None,
+) -> Path:
+    """
+    Organize a receipt file into an account folder.
+
+    For receipts to be recognized as documents in Beancount, their filename has
+    the requirement that it must begin with a date in Y-m-d format.  Hence
+    the requisite transaction date at the beginning of the file name.
+    """
+    receipt_path = predict_receipt_destination_path(
+        transaction_date, filename, account, description
+    )
+    raw = fetch_receipt(filename)
+    receipt_path.write_bytes(raw)
     return receipt_path
 
 
@@ -315,46 +333,111 @@ def do_process(args: argparse.Namespace) -> None:
     print(f"Main account: {account}")
 
 
+class ImportResult:
+    receipt_data: bytes
+    transaction_text: str
+    receipt_destination_path: Path
+    transaction_destination_path: Path
+    rollback_size: int | None = None
+
+    def __init__(self, filename: str) -> None:
+        cfg = get_cfg()
+
+        receipt_data = fetch_receipt(filename)
+
+        beancount_transaction, account = process_receipt(filename)
+        # Strip headline comments and newlines from the transaction.
+        while beancount_transaction.lstrip().startswith(";"):
+            beancount_transaction = "".join(
+                beancount_transaction.splitlines(True)[1:]
+            ).lstrip()
+
+        datestr, reststr = beancount_transaction.split(" ", 1)
+        # Take the text after the date, remove the transaction flag and the space next to it,
+        # then use the payee and narration to construct a description for the receipt file name.
+        # If there is a comment at the end of the line, strip it too.
+        reststr = (
+            reststr.splitlines()[0][2:]
+            .replace('" "', " — ")
+            .replace('"', "")
+            .split(";")[0]
+            .strip()
+        )
+        # Take the text containing the date, and make a date for the receipt file name.
+        transdate = date.strptime(datestr, "%Y-%m-%d")  # type: ignore
+
+        receipt_path = predict_receipt_destination_path(
+            transdate, filename, account, reststr
+        )
+        formatted_tx = insert_document_metadata(
+            beancount_transaction, str(receipt_path)
+        )
+
+        self.receipt_data = receipt_data
+        self.transaction_text = formatted_tx
+        self.receipt_destination_path = receipt_path
+        self.transaction_destination_path = Path(
+            cfg["beancount_folder"]
+        ) / os.path.basename(cfg["beancount_transaction_destination_file"])
+
+    def commit(self) -> None:
+        dest = self.transaction_destination_path
+        receipt_path = self.receipt_destination_path
+
+        # First, write to the transaction ledger.
+        with open(self.transaction_destination_path, "a") as f:
+            self.rollback_size = self.transaction_destination_path.stat().st_size
+            # no marker line is necessary, the transaction has a link to the document in it.
+            # f.write("\n; {} imported by pycash.\n".format(args.filename))
+            f.write("\n\n" + self.transaction_text.strip() + "\n")
+            f.flush()
+
+        # Then write the receipt data.
+        try:
+            receipt_path.write_bytes(self.receipt_data)
+        except Exception:
+            print(
+                f"Receipt {receipt_path} could not be saved, rolling back transaction...",
+                file=sys.stderr,
+            )
+            self.rollback()
+            raise
+
+        print(
+            f"The transaction has been imported to {dest} and the receipt has been filed under {receipt_path}",
+            file=sys.stderr,
+        )
+
+    def rollback(self) -> None:
+        assert self.rollback_size is not None
+        eee: Exception | None = None
+
+        if self.receipt_destination_path.exists():
+            try:
+                self.receipt_destination_path.unlink()
+            except Exception as e:
+                eee = e
+                print(
+                    f"The receipt {self.receipt_destination_path} could not be deleted as part of the transaction rollback",
+                    file=sys.stderr,
+                )
+        try:
+            os.truncate(self.transaction_destination_path, self.rollback_size)
+            self.rollback_size = None
+        except Exception as e:
+            eee = e
+            print(
+                f"The transaction written to {self.transaction_destination_path} could not be rolled back",
+                file=sys.stderr,
+            )
+
+        if eee is not None:
+            raise eee
+
+
 def do_import(args: argparse.Namespace) -> None:
-    cfg = get_cfg()
-
-    beancount_transaction, account = process_receipt(args.filename)
-    # Strip headline comments and newlines from the transaction.
-    while beancount_transaction.lstrip().startswith(";"):
-        beancount_transaction = "".join(
-            beancount_transaction.splitlines(True)[1:]
-        ).lstrip()
-
-    datestr, reststr = beancount_transaction.split(" ", 1)
-    # Take the text after the date, remove the transaction flag and the space next to it,
-    # then use the payee and narration to construct a description for the receipt file name.
-    # If there is a comment at the end of the line, strip it too.
-    reststr = (
-        reststr.splitlines()[0][2:]
-        .replace('" "', " — ")
-        .replace('"', "")
-        .split(";")[0]
-        .strip()
-    )
-    # Take the text containing the date, and make a date for the receipt file name.
-    transdate = date.strptime(datestr, "%Y-%m-%d")  # type: ignore
-
-    receipt_path = organize_receipt(transdate, args.filename, account, reststr)
-    formatted_tx = insert_document_metadata(beancount_transaction, str(receipt_path))
-
-    dest = Path(cfg["beancount_folder"]) / os.path.basename(
-        cfg["beancount_transaction_destination_file"]
-    )
-    with open(dest, "a") as f:
-        f.write("\n; {} imported by pycash.\n".format(args.filename))
-        f.write(formatted_tx.rstrip("\n"))
-        if not formatted_tx.endswith("\n"):
-            f.write("\n")
-
-    print(
-        f"The transaction has been imported to {dest} and the receipt has been filed under {receipt_path}",
-        file=sys.stderr,
-    )
+    result = ImportResult(args.filename)
+    result.commit()
 
 
 def do_ingest(args: argparse.Namespace) -> None:
@@ -396,10 +479,22 @@ def do_ingest(args: argparse.Namespace) -> None:
                 if action != "import":
                     continue  # genuinely skip this receipt
 
+            # Attempt the import.
             try:
-                do_import(argparse.Namespace(filename=receipt))
+                imp = ImportResult(receipt)
             except Exception as e:
                 print(f"Import of {receipt} failed: {e}", file=sys.stderr)
+                if batch_mode:  # defer error exit to later
+                    retval = 1
+                    continue
+                else:
+                    sys.exit(1)
+
+            # Commit the successful import.
+            try:
+                imp.commit()
+            except Exception as e:
+                print(f"Commit of imported {receipt} failed: {e}", file=sys.stderr)
                 if batch_mode:  # defer error exit to later
                     retval = 1
                     continue
@@ -409,16 +504,28 @@ def do_ingest(args: argparse.Namespace) -> None:
             # Remove from WebDAV only after successful import.
             try:
                 do_remove(argparse.Namespace(filename=receipt))
-            except subprocess.CalledProcessError as e:
+            except Exception as e:
                 print(
-                    f"Could not remove {receipt} from WebDAV (exit {e.returncode})",
+                    f"Could not remove {receipt} from WebDAV: {e}",
                     file=sys.stderr,
                 )
+                try:
+                    # At this point, we have the transaction written and the receipt
+                    # saved locally, but the receipt could not be deleted remotely,
+                    # so it is safe to roll back without data loss.  Since the receipt
+                    # is still on the server side, we can retry reimporting the same
+                    # receipt later.
+                    imp.rollback()
+                except Exception as ee:
+                    print(
+                        f"Could not roll back transaction of imported {receipt}: {ee}",
+                        file=sys.stderr,
+                    )
                 if batch_mode:
-                    retval = e.returncode  # defer error exit to later
+                    retval = 1  # defer error exit to later
                     continue
                 else:
-                    sys.exit(e.returncode)
+                    sys.exit(1)
 
     sys.exit(retval)
 
