@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from typing import TypedDict, cast, IO
 
@@ -163,6 +164,7 @@ def process(filename: str) -> tuple[str, str]:
         raise subprocess.CalledProcessError(ret, cmd)
 
     llm_output = "".join(accumulated).strip()
+    llm_output_original = llm_output
 
     # Fish out the last line...
     llm_output_lines = llm_output.splitlines(True)
@@ -179,7 +181,12 @@ def process(filename: str) -> tuple[str, str]:
     llm_output = "".join(llm_output_lines)
 
     # Fish out first account in the payment accounts list.
-    account = json.loads(last_line)[0]
+    try:
+        account = json.loads(last_line)[0]
+    except json.decoder.JSONDecodeError:
+        raise Exception(
+            f"Failed decoding expected JSON at end of string:\n{llm_output_original}"
+        )
 
     return llm_output, account
 
@@ -196,7 +203,19 @@ def fetch(filename: str) -> bytes:
     return raw
 
 
-def organize_receipt(filename: str, account: str) -> Path:
+def organize_receipt(
+    transaction_date: date,
+    filename: str,
+    account: str,
+    description: str | None = None,
+) -> Path:
+    """
+    Organize a receipt file into an account folder.
+
+    For receipts to be recognized as documents in Beancount, their filename has
+    the requirement that it must begin with a date in Y-m-d format.  Hence
+    the requisite transaction date at the beginning of the file name.
+    """
     cfg = get_cfg()
 
     raw = fetch(filename)
@@ -204,7 +223,11 @@ def organize_receipt(filename: str, account: str) -> Path:
     # Construct the final destination folder.  Account folders reside directly under `beancount_folder`.
     receipt_dir = Path(cfg["beancount_folder"]) / account.replace(":", "/")
     receipt_dir.mkdir(parents=True, exist_ok=True)
-    receipt_path = receipt_dir / filename
+    if description:
+        fn = transaction_date.strftime("%Y-%m-%d.") + description + " — " + filename
+    else:
+        fn = transaction_date.strftime("%Y-%m-%d.") + filename
+    receipt_path = receipt_dir / fn
     receipt_path.write_bytes(raw)
 
     return receipt_path
@@ -222,6 +245,45 @@ def do_process(args: argparse.Namespace) -> None:
 
     print(llm_output)
     print(f"Main account: {account}")
+
+
+def insert_document_metadata(transaction_text: str, file_path: str) -> str:
+    lines = transaction_text.splitlines(True)
+    if not lines or lines[0].strip().startswith("#"):
+        return transaction_text
+    stripped = lines[1].lstrip()
+    indent = lines[1][: len(lines[1]) - len(stripped)]
+    lines.insert(1, '{}document: "{}"\n'.format(indent, file_path.replace('"', '\\"')))
+    return "".join(lines)
+
+
+def do_import(args: argparse.Namespace) -> None:
+    cfg = get_cfg()
+
+    llm_output, account = process(args.filename)
+    datestr, reststr = llm_output.split(" ", 1)
+    # Take the text after the date, remove the transaction flag and the space next to it,
+    # then use the payee and narration to construct a description for the receipt file name.
+    reststr = reststr.splitlines()[0][2:].replace('" "', " — ").replace('"', "")
+    # Take the text containing the date, and make a date for the receipt file name.
+    transdate = date.strptime(datestr, "%Y-%m-%d")
+
+    receipt_path = organize_receipt(transdate, args.filename, account, reststr)
+    formatted_tx = insert_document_metadata(llm_output, str(receipt_path))
+
+    dest = Path(cfg["beancount_folder"]) / os.path.basename(
+        cfg["beancount_transaction_destination_file"]
+    )
+    with open(dest, "a") as f:
+        f.write("\n; {} imported by pycash.\n".format(args.filename))
+        f.write(formatted_tx.rstrip("\n"))
+        if not formatted_tx.endswith("\n"):
+            f.write("\n")
+
+    print(
+        f"The transaction has been imported to {dest} and the receipt has been filed under {receipt_path}",
+        file=sys.stderr,
+    )
 
 
 def do_organize(args: argparse.Namespace) -> None:
@@ -264,6 +326,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     org_cmd.add_argument("account", help="Payment account (e.g. Assets:Cash:CHF)")
 
+    imp_cmd = sp.add_parser(
+        "import", help="Full import pipeline: LLM → organize → append to Beancount"
+    )
+    imp_cmd.add_argument(
+        "filename", help="Filename of the receipt file in receipts_dir"
+    )
+
     return ap
 
 
@@ -282,6 +351,7 @@ def main() -> None:
     dispatch = {
         "list": do_list,
         "fetch": do_fetch,
+        "import": do_import,
         "organize": do_organize,
         "process": do_process,
     }  # type:ignore
