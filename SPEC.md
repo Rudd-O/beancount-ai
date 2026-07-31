@@ -1,5 +1,34 @@
 
-# Cash Receipt Importer — Specification (Draft 4)
+# Cash Receipt Importer — Specification (Draft 5)
+
+The purpose of this software is to help the user import scanned or photographed
+receipts into a Beancount accounting data set, and organize said receipts
+coherently in an accessible manner.
+
+For security reasons, the software is split into two parts:
+
+1. The client: runs on the virtual machine dedicated to accounting, where all the
+   Beancount files reside.
+2. The server: runs on the virtual machine that has the receipts, and also access
+   to an Open-WebUI LLM API that will process the receipts and turn them into
+   Beancount-formatted transactions.
+
+## Importing receipts
+
+Importing of receipts follows this procedure for each receipt the user
+directs the software to handle:
+
+* Process the receipt to create the Beancount transaction record.
+* Identify the main payment account funding the transaction.
+* Obtain the receipt file and store it a subfolder of the Beancount folder,
+  named after the payment account.  E.g. if the payment account is
+  "Assets:Cash:CHF", then the subfolder should be Assets/Cash/CHF.
+* Add a `document:` metadata entry to the created Beancount transaction
+  (goes right after the date line), whose value must be the full path
+  of the receipt file.
+* Append the created Beancount transaction to the import destination file.
+* Finally, and only if all the prior steps are successful, the software will
+  remove the receipt.
 
 ## Project Structure
 

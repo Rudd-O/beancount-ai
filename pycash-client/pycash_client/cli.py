@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 from typing import TypedDict, cast, IO
@@ -111,7 +112,13 @@ def _call_remote(
 # -- subcommands -----------------------------------------------------------
 
 
-def do_list(_args: argparse.Namespace) -> None:
+def list_receipts() -> list[str]:
+    """Return receipt filenames from the server.
+
+    Raises on qrexec transport error; prints to stderr and returns ``[]``
+    when the JSON cannot be decoded.
+    """
+
     cmd, proc, stdin, stdout = _call_remote("pycash.List")
     stdin.close()
 
@@ -122,15 +129,15 @@ def do_list(_args: argparse.Namespace) -> None:
 
     try:
         data = json.loads(read_data)
-        for fname in data["receipts"]:
-            print(fname)
+        mm = [os.path.basename(x) for x in data["receipts"]]
+        assert mm == data["receipts"]
+        return data["receipts"]
     except Exception as e:
         print(f"cannot decode server response: {e}", file=sys.stderr)
+        return []
 
-    sys.exit()
 
-
-def process(filename: str) -> tuple[str, str]:
+def process_receipt(filename: str) -> tuple[str, str]:
     """
     Calls upon the LLM on the server side to produce a Beancount transaction
     and the main payment account.
@@ -193,7 +200,7 @@ def process(filename: str) -> tuple[str, str]:
     return llm_output, account
 
 
-def fetch(filename: str) -> bytes:
+def fetch_receipt(filename: str) -> bytes:
     cmd, proc, stdin, stdout = _call_remote("pycash.Fetch", arg=filename)
     stdin.close()
 
@@ -220,7 +227,7 @@ def organize_receipt(
     """
     cfg = get_cfg()
 
-    raw = fetch(filename)
+    raw = fetch_receipt(filename)
 
     # Construct the final destination folder.  Account folders reside directly under `beancount_folder`.
     receipt_dir = Path(cfg["beancount_folder"]) / account.replace(":", "/")
@@ -235,8 +242,13 @@ def organize_receipt(
     return receipt_path
 
 
+def do_list(_args: argparse.Namespace) -> None:
+    for fname in list_receipts():
+        print(fname)
+
+
 def do_fetch(args: argparse.Namespace) -> None:
-    gotten = fetch(args.filename)
+    gotten = fetch_receipt(args.filename)
     Path(args.destination).write_bytes(gotten)
 
 
@@ -251,7 +263,7 @@ def do_remove(args: argparse.Namespace) -> None:
 
 def do_process(args: argparse.Namespace) -> None:
     try:
-        llm_output, account = process(args.filename)
+        llm_output, account = process_receipt(args.filename)
     except subprocess.CalledProcessError as e:
         sys.exit(e.returncode)
 
@@ -269,19 +281,37 @@ def insert_document_metadata(transaction_text: str, file_path: str) -> str:
     return "".join(lines)
 
 
+def _preview_receipt(filename: str, preview_dir: Path) -> None:
+    dest_path = preview_dir / filename
+    dest_path.write_bytes(fetch_receipt(filename))
+    subprocess.Popen(
+        ["xdg-open", str(dest_path)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 def do_import(args: argparse.Namespace) -> None:
     cfg = get_cfg()
 
-    llm_output, account = process(args.filename)
-    datestr, reststr = llm_output.split(" ", 1)
+    beancount_transaction, account = process_receipt(args.filename)
+    # Strip headline comments and newlines from the transaction.
+    while beancount_transaction.lstrip().startswith(";"):
+        beancount_transaction = "".join(
+            beancount_transaction.splitlines(True)[1:]
+        ).lstrip()
+
+    datestr, reststr = beancount_transaction.split(" ", 1)
     # Take the text after the date, remove the transaction flag and the space next to it,
     # then use the payee and narration to construct a description for the receipt file name.
     reststr = reststr.splitlines()[0][2:].replace('" "', " — ").replace('"', "")
     # Take the text containing the date, and make a date for the receipt file name.
-    transdate = date.strptime(datestr, "%Y-%m-%d")
+    transdate = date.strptime(datestr, "%Y-%m-%d")  # type: ignore
 
     receipt_path = organize_receipt(transdate, args.filename, account, reststr)
-    formatted_tx = insert_document_metadata(llm_output, str(receipt_path))
+    formatted_tx = insert_document_metadata(beancount_transaction, str(receipt_path))
 
     dest = Path(cfg["beancount_folder"]) / os.path.basename(
         cfg["beancount_transaction_destination_file"]
@@ -298,8 +328,59 @@ def do_import(args: argparse.Namespace) -> None:
     )
 
 
+def do_ingest(args: argparse.Namespace) -> None:
+    receipts = list_receipts()
+    if not receipts:
+        print("No receipts to ingest.", file=sys.stderr)
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        preview_dir = Path(tmpdir)
+
+        for receipt in receipts:
+            action = "skip"
+            while True:
+                print(f"\nImport '{receipt}'? [y/n/p/q] ", file=sys.stderr, end="")
+                try:
+                    answer = input().strip().lower()
+                except EOFError:
+                    return
+
+                if answer == "q":
+                    return
+
+                if answer == "p":
+                    _preview_receipt(receipt, preview_dir)
+                    continue  # re-prompt for the same receipt
+
+                if answer == "y":
+                    action = "import"
+
+                break  # leave prompt loop after y or n
+
+            if action != "import":
+                continue  # genuinely skip this receipt
+
+            try:
+                do_import(argparse.Namespace(filename=receipt))
+            except Exception as e:
+                print(f"Ingestion failed for '{receipt}': {e}", file=sys.stderr)
+                sys.exit(1)
+
+            # Remove from WebDAV only after successful import.
+            try:
+                do_remove(argparse.Namespace(filename=receipt))
+            except subprocess.CalledProcessError as e:
+                print(
+                    f"Could not remove '{receipt}' from WebDAV (exit {e.returncode})",
+                    file=sys.stderr,
+                )
+                sys.exit(e.returncode)
+
+
 def do_organize(args: argparse.Namespace) -> None:
-    receipt_path = organize_receipt(args.filename, args.account)
+    tdate = date.strptime(args.date, "%Y-%m-%d")  # type:ignore
+    receipt_path = organize_receipt(tdate, args.filename, args.account)
     print("The file has been organized into", str(receipt_path), file=sys.stderr)
 
 
@@ -339,6 +420,7 @@ def build_parser() -> argparse.ArgumentParser:
     org_cmd.add_argument(
         "filename", help="Filename of the receipt file in receipts_dir"
     )
+    org_cmd.add_argument("date", help="Date to impute to receipt file", type=str)
     org_cmd.add_argument("account", help="Payment account (e.g. Assets:Cash:CHF)")
 
     imp_cmd = sp.add_parser(
@@ -346,6 +428,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     imp_cmd.add_argument(
         "filename", help="Filename of the receipt file in receipts_dir"
+    )
+
+    _ing_cmd = sp.add_parser(
+        "ingest",
+        help="Batch ingest receipts interactively: process → organize → append → remove",
     )
 
     return ap
@@ -363,14 +450,15 @@ def main() -> None:
         ap.print_help(sys.stderr)
         sys.exit(1)
 
-    dispatch = {
+    dispatch = {  # type:ignore
         "list": do_list,
         "fetch": do_fetch,
         "import": do_import,
+        "ingest": do_ingest,
         "organize": do_organize,
         "process": do_process,
         "remove": do_remove,
-    }  # type:ignore
+    }
     dispatch[args.command](args)
 
 
