@@ -109,9 +109,6 @@ def _call_remote(
     return cmd, proc, proc.stdin, proc.stdout
 
 
-# -- subcommands -----------------------------------------------------------
-
-
 def list_receipts() -> list[str]:
     """Return receipt filenames from the server.
 
