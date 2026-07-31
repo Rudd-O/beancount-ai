@@ -71,6 +71,17 @@ def get_cfg() -> Configuration:
     return _cfg
 
 
+def shorten_fn(folder: str | Path, fn: str):
+    # Reduce max path length without affecting the file name extension.
+    maxlen = os.pathconf(folder, "PC_NAME_MAX")
+    # Sarn, we only handle UTF-8 file systems.  Maybe this would be good to fix in the future.
+    while len(fn.encode("utf-8")) > maxlen:
+        n, e = os.path.splitext(fn)
+        n = n[:-1]
+        fn = n + e
+    return fn
+
+
 # -- qrexec transport ------------------------------------------------------
 
 # From inside a VM, IPC to another VM uses:
@@ -233,6 +244,12 @@ def organize_receipt(
         fn = transaction_date.strftime("%Y-%m-%d.") + description + " — " + filename
     else:
         fn = transaction_date.strftime("%Y-%m-%d.") + filename
+
+    # No slashes in the file name, please.
+    fn.replace("/", "_")
+
+    fn = shorten_fn(receipt_dir, fn)
+
     receipt_path = receipt_dir / fn
     receipt_path.write_bytes(raw)
 
