@@ -254,7 +254,7 @@ def organize_receipt(
         fn = transaction_date.strftime("%Y-%m-%d.") + filename
 
     # No slashes in the file name, please.
-    fn.replace("/", "_")
+    fn = fn.replace("/", "_")
 
     fn = shorten_fn(receipt_dir, fn)
 
