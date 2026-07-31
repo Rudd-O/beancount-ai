@@ -372,6 +372,7 @@ def main() -> None:
         "pycash.List": do_list,
         "pycash.Fetch": do_fetch,
         "pycash.Process": do_process,
+        "pycash.Remove": do_remove,
     }
     handler = dispatch.get(args.command)
     if handler is None:
