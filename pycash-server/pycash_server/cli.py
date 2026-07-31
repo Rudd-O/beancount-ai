@@ -27,6 +27,17 @@ PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
 
 
 class Configuration(TypedDict):
+    """Configuration loaded from a pycash JSON config file.
+
+    Keys:
+        openwebui_url: Base URL of the Open-WebUI instance for receipt processing.
+        openwebui_token: API token for authenticating with the Open-WebUI instance.
+        openwebui_model: Model name to use via the Open-WebUI instance.
+        receipts_username: WebDAV username for the receipts data source.
+        receipts_password: WebDAV password for the receipts data source.
+        receipts_ingestion_url: WebDAV URL where receipt files to be ingested are stored.
+    """
+
     openwebui_url: str
     openwebui_token: str
     openwebui_model: str

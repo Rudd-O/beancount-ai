@@ -25,6 +25,15 @@ CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
 
 
 class Configuration(TypedDict):
+    """Configuration loaded from a pycash JSON config file.
+
+    Keys:
+        target_vm: Name of the Qubes VM where pycash-server runs (`None` to spawn the server on-demand locally).
+        beancount_folder: Root directory of the Beancount project.
+        beancount_main_file: Path to the main Beancount ledger file relative to `beancount_folder` (e.g. `main.bean`).
+        beancount_transaction_destination_file: Filename to append ingested transactions to (e.g. `cash.bean`).
+    """
+
     target_vm: str | None
     beancount_folder: str
     beancount_main_file: str
@@ -555,32 +564,24 @@ def build_parser() -> argparse.ArgumentParser:
     process_cmd = sp.add_parser(
         "process", help="Process a receipt image via Open-WebUI"
     )
-    process_cmd.add_argument(
-        "filename", help="Filename of the receipt file in receipts_dir"
-    )
+    process_cmd.add_argument("filename", help="Filename of the receipt")
 
     fetch_cmd = sp.add_parser("fetch", help="Fetch a receipt file from the server")
-    fetch_cmd.add_argument(
-        "filename", help="Filename of the receipt file in receipts_dir"
-    )
+    fetch_cmd.add_argument("filename", help="Filename of the receipt")
     fetch_cmd.add_argument("destination", help="Local path to save the retrieved file")
 
-    rm_cmd = sp.add_parser("remove", help="Delete a receipt file from WebDAV")
-    rm_cmd.add_argument("filename", help="Filename of the receipt file in receipts_dir")
+    rm_cmd = sp.add_parser("remove", help="Delete a receipt file")
+    rm_cmd.add_argument("filename", help="Filename of the receipt file")
 
     org_cmd = sp.add_parser("organize", help="File a receipt under a payment account")
-    org_cmd.add_argument(
-        "filename", help="Filename of the receipt file in receipts_dir"
-    )
+    org_cmd.add_argument("filename", help="Filename of the receipt")
     org_cmd.add_argument("date", help="Date to impute to receipt file", type=str)
     org_cmd.add_argument("account", help="Payment account (e.g. Assets:Cash:CHF)")
 
     imp_cmd = sp.add_parser(
         "import", help="Full import pipeline: LLM → organize → append to Beancount"
     )
-    imp_cmd.add_argument(
-        "filename", help="Filename of the receipt file in receipts_dir"
-    )
+    imp_cmd.add_argument("filename", help="Filename of the receipt")
 
     ing_cmd = sp.add_parser(
         "ingest",
