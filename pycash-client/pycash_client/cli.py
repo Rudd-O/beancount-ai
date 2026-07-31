@@ -112,20 +112,22 @@ def _call_remote(
 
 
 def do_list(_args: argparse.Namespace) -> None:
-    _, proc, stdin, stdout = _call_remote("pycash.List")
+    cmd, proc, stdin, stdout = _call_remote("pycash.List")
     stdin.close()
 
+    read_data = stdout.read()
+    ret = proc.wait()
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
+
     try:
-        data = json.load(stdout)
-        if data.get("error"):
-            print(data["error"], file=sys.stderr)
-        else:
-            for fname in data["receipts"]:
-                print(fname)
+        data = json.loads(read_data)
+        for fname in data["receipts"]:
+            print(fname)
     except Exception as e:
         print(f"cannot decode server response: {e}", file=sys.stderr)
 
-    sys.exit(proc.wait())
+    sys.exit()
 
 
 def process(filename: str) -> tuple[str, str]:
@@ -234,7 +236,17 @@ def organize_receipt(
 
 
 def do_fetch(args: argparse.Namespace) -> None:
-    Path(args.destination).write_bytes(fetch(args.filename))
+    gotten = fetch(args.filename)
+    Path(args.destination).write_bytes(gotten)
+
+
+def do_remove(args: argparse.Namespace) -> None:
+    cmd, proc, stdin, _ = _call_remote("pycash.Remove", arg=args.filename)
+    stdin.close()
+
+    ret = proc.wait()
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
 
 
 def do_process(args: argparse.Namespace) -> None:
@@ -320,6 +332,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch_cmd.add_argument("destination", help="Local path to save the retrieved file")
 
+    rm_cmd = sp.add_parser("remove", help="Delete a receipt file from WebDAV")
+    rm_cmd.add_argument("filename", help="Filename of the receipt file in receipts_dir")
+
     org_cmd = sp.add_parser("organize", help="File a receipt under a payment account")
     org_cmd.add_argument(
         "filename", help="Filename of the receipt file in receipts_dir"
@@ -354,6 +369,7 @@ def main() -> None:
         "import": do_import,
         "organize": do_organize,
         "process": do_process,
+        "remove": do_remove,
     }  # type:ignore
     dispatch[args.command](args)
 

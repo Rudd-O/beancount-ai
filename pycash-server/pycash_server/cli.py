@@ -20,6 +20,7 @@ from webdav4.client import Client  # type:ignore
 from .pdf import render_pdf_pages_to_png
 
 CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
+PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
 
 
 # -- configuration ---------------------------------------------------------
@@ -32,9 +33,9 @@ class Configuration(TypedDict):
     openwebui_model: str
 
     # WebDAV credentials (preferred over receipts_dir for new configs)
-    receipts_url: str | None
-    receipts_username: str | None
-    receipts_password: str | None
+    receipts_url: str
+    receipts_username: str
+    receipts_password: str
 
 
 _cfg: Configuration | None = None  # cached config loaded from resolved path
@@ -85,16 +86,9 @@ _EXT = frozenset((".jpg", ".jpeg", ".png", ".pdf"))
 def do_list(args: argparse.Namespace) -> None:
     cfg = get_cfg()
 
-    url = cfg.get("receipts_url")
-    username = cfg.get("receipts_username")
-    password = cfg.get("receipts_password")
-
-    if not (url and username and password):
-        print(
-            json.dumps({"error": "missing WebDAV credentials in config"}),
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    url = cfg["receipts_url"]
+    username = cfg["receipts_username"]
+    password = cfg["receipts_password"]
 
     client = Client(url, auth=(username, password))
 
@@ -106,7 +100,7 @@ def do_list(args: argparse.Namespace) -> None:
     try:
         items = cast(list[ItemListing], client.ls("/", detail=True))
     except Exception as e:
-        print(json.dumps({"error": f"WebDAV list failed: {e}"}), file=sys.stderr)
+        print(f"error: WebDAV list failed: {e}", file=sys.stderr)
         sys.exit(1)
 
     files: list[ItemListing] = []
@@ -134,45 +128,6 @@ def do_list(args: argparse.Namespace) -> None:
     )
 
 
-# -- subcommands -----------------------------------------------------------
-
-
-def do_fetch(args: argparse.Namespace) -> None:
-    cfg = get_cfg()
-
-    url = cfg.get("receipts_url")
-    username = cfg.get("receipts_username")
-    password = cfg.get("receipts_password")
-
-    if not (url and username and password):
-        print(
-            json.dumps({"error": "missing WebDAV credentials in config"}),
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
-    webdav_client = Client(url, auth=(username, password))
-    receipt_path = f"/{fn}"
-
-    print(f"Fetching {fn} from WebDAV receipts URL", file=sys.stderr)
-
-    try:
-        with webdav_client.open(receipt_path, "rb") as remote_file:
-            raw: bytes = remote_file.read()  # type: ignore
-    except Exception as e:
-        print(json.dumps({"error": f"cannot read {fn}: {e}"}), file=sys.stderr)
-        sys.exit(1)
-
-    sys.stdout.buffer.write(raw)
-    sys.stdout.buffer.flush()
-
-
-# -- subcommands -----------------------------------------------------------
-
-_PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
-
-
 def do_process(args: argparse.Namespace) -> None:
     import base64
     import ssl
@@ -190,16 +145,9 @@ def do_process(args: argparse.Namespace) -> None:
 
     cfg = get_cfg()
 
-    url = cfg.get("receipts_url")
-    username = cfg.get("receipts_username")
-    password = cfg.get("receipts_password")
-
-    if not (url and username and password):
-        print(
-            json.dumps({"error": "missing WebDAV credentials in config"}),
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    url = cfg["receipts_url"]
+    username = cfg["receipts_username"]
+    password = cfg["receipts_password"]
 
     argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
     fn = os.path.basename(argsfilename)
@@ -209,13 +157,13 @@ def do_process(args: argparse.Namespace) -> None:
 
     print(f"Reading {fn} from WebDAV receipts URL", file=sys.stderr)
 
-    prompt_text = _PROMPT_PATH.read_text()
+    prompt_text = PROMPT_PATH.read_text()
 
     try:
         with webdav_client.open(receipt_path, "rb") as remote_file:
             raw: bytes = remote_file.read()  # type: ignore
     except Exception as e:
-        print(json.dumps({"error": f"cannot read {fn}: {e}"}), file=sys.stderr)
+        print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)
 
     suffix = Path(fn).suffix.lower()
@@ -258,7 +206,8 @@ def do_process(args: argparse.Namespace) -> None:
                 )
                 page_infos.append((page_num, dpi_used, len(png_bytes)))
         except Exception as e:
-            print(json.dumps({"error": f"PDF rendering failed: {e}"}), file=sys.stderr)
+            # Report fatal error as a stream message.  Then exit.
+            print(json.dumps({"error": f"PDF rendering failed: {e}"}))
             sys.exit(1)
         for pnum, dpi_used, nbytes in page_infos:
             print(
@@ -314,6 +263,50 @@ def do_process(args: argparse.Namespace) -> None:
             sys.stdout.flush()
 
 
+def do_fetch(args: argparse.Namespace) -> None:
+    cfg = get_cfg()
+
+    url = cfg["receipts_url"]
+    username = cfg["receipts_username"]
+    password = cfg["receipts_password"]
+
+    fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
+    webdav_client = Client(url, auth=(username, password))
+    receipt_path = f"/{fn}"
+
+    print(f"Fetching {fn} from WebDAV receipts URL", file=sys.stderr)
+
+    try:
+        with webdav_client.open(receipt_path, "rb") as remote_file:
+            raw: bytes = remote_file.read()  # type: ignore
+    except Exception as e:
+        print(f"error: cannot read {fn}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    sys.stdout.buffer.write(raw)
+    sys.stdout.buffer.flush()
+
+
+def do_remove(args: argparse.Namespace) -> None:
+    cfg = get_cfg()
+
+    url = cfg["receipts_url"]
+    username = cfg["receipts_username"]
+    password = cfg["receipts_password"]
+
+    fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
+    webdav_client = Client(url, auth=(username, password))
+    receipt_path = f"/{fn}"
+
+    print(f"Removing {fn} from WebDAV receipts URL", file=sys.stderr)
+
+    try:
+        webdav_client.remove(receipt_path)
+    except Exception as e:
+        print(f"error: cannot remove {fn}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 # -- CLI -------------------------------------------------------------------
 
 
@@ -338,6 +331,14 @@ def build_parser() -> argparse.ArgumentParser:
         "pycash.Fetch", help="Write the raw contents of a receipt file to stdout"
     )
     fetch_cmd.add_argument(
+        "filename",
+        help="Filename of the receipt file in receipts_dir (encoded as hex)",
+    )
+
+    remove_cmd = sp.add_parser(
+        "pycash.Remove", help="Delete a receipt file from WebDAV"
+    )
+    remove_cmd.add_argument(
         "filename",
         help="Filename of the receipt file in receipts_dir (encoded as hex)",
     )
@@ -367,7 +368,11 @@ def main() -> None:
     _cfg_override = args.conf_path  # set it once for downstream calls to get_cfg()
     _cfg = None  # ensure fresh start if already cached (reload from --config path)
 
-    dispatch = {"pycash.List": do_list, "pycash.Fetch": do_fetch, "pycash.Process": do_process}
+    dispatch = {
+        "pycash.List": do_list,
+        "pycash.Fetch": do_fetch,
+        "pycash.Process": do_process,
+    }
     handler = dispatch.get(args.command)
     if handler is None:
         ap.print_help(sys.stderr)
