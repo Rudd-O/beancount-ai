@@ -76,40 +76,40 @@ cash-receipt-importer/
 ├── RECEIPT_CONVERSION_PROMPT.md               # Tested LLM prompt for receipt parsing
 ├── test-config.json                           # Local config (target_vm: null)
 │
-├── pycash-server/                             # Runs on `pim` VM
+├── pycash-server/                             # Runs on server VM which has access to receipts and LLM
 │   ├── pyproject.toml                         # entry-point: pycash-server = ...cli:main
 │   └── pycash_server/cli.py                   # pycash.List + pycash.Process subcommands
 │
-└── pycash-client/                             # Runs on `financial` VM
+└── pycash-client/                             # Runs on client VM which has Beancount data
     ├── pyproject.toml                         # entry-point: pycash-client = ...cli:main
     └── pycash_client/cli.py                   # list + process subcommands → calls server via qrexec/local
 ```
 
-## Configuration (shared)
+## Configuration (`~/.config/pycash.json`)
 
-Both programs read `~/.config/pycash.json` for their configuration. This file is the single shared configuration source:
-
-```json
-{
-  "target_vm": "pim",
-  "openwebui_url": "https://<server>/",
-  "openwebui_token": "<api-key>",
-  "openwebui_model": "<model-id>"
-}
-```
-
-| Field | Server meaning | Client meaning |
-|---|---|---|
-| `target_vm` | Name of the financial VM where pycash-client runs. If null, server invokes `pycash-server` locally via subprocess instead of qrexec. Also supports `--config` / `$PYCASH_CONFIG` overrides. | Name/VM name of the pim VM to talk to. If `null`, client invokes `pycash-server` locally via subprocess for local testing support. Also supports `--config` / `$PYCASH_CONFIG` overrides. |
-| `openwebui_url` | Base URL (with `/v1`) for Open-WebUI REST API | Not used |
-| `openwebui_token` | API key for Open-WebUI authentication | Not used |
-| `openwebui_model` | Model ID to use for the LLM request to Open-WebUI client side config source | Not used |
-
-Each program also supports:
+Both programs read from the same config file at `~/.config/pycash.json`. Resolution order (highest → lowest): `--config` CLI argument, `$PYCASH_CONFIG` environment variable, default `~/.config/pycash.json`. Each program also supports:
 - CLI flag `--config <path>` to override which config file to read
 - Environment variable `$PYCASH_CONFIG` as a second-level override
 
-Resolution order (highest → lowest): `--config` arg, `$PYCASH_CONFIG` env, `~/.config/pycash.json`.
+### Server configuration fields
+
+| Field | Type | Description |
+|---|---|---|
+| `openwebui_url` | `str` | Base URL (with `/v1`) for Open-WebUI REST API |
+| `openwebui_token` | `str` | API key for Open-WebUI authentication |
+| `openwebui_model` | `str` | Model ID to use for the LLM request to Open-WebUI |
+| `receipts_username` | `str` | WebDAV username for the receipts data source |
+| `receipts_password` | `str` | WebDAV password for the receipts data source |
+| `receipts_ingestion_url` | `str` | WebDAV URL where receipt files to be ingested are stored |
+
+### Client configuration fields
+
+| Field | Type | Description |
+|---|---|---|
+| `target_vm` | `str \| null` | Name of the Qubes VM where pycash-server runs. If `null`, client invokes `pycash-server` locally via subprocess for local testing support. |
+| `beancount_folder` | `Path` | Root directory of the Beancount project |
+| `beancount_main_file` | `str` | Path to the main Beancount ledger file relative to ``beancount_folder`` |
+| `beancount_transaction_destination_file` | `str` | Filename to append ingested transactions to |
 
 ## Server-client architecture and communication protocol
 
@@ -121,7 +121,8 @@ When server is on another VM, qrexec communication is used, and the service call
 the subcommand joined with a plus sign to the hex-encoded argument (if needed by the call).
 
 Client has the ability to send stdin to server, and server can respond via stdout.
-## pycash-server (pim VM)
+
+## pycash-server (server VM)
 
 ### Purpose
 
@@ -132,7 +133,7 @@ Lists available receipt files as a JSON document and processes individual receip
 | Context | How it runs | Config source |
 |---|---|---|
 | Direct CLI (test/dev) | `pycash-server pycash.List -d /some/path` | `$PYCASH_CONFIG env → ~/.config/pycash.json` |
-| qrexec service | Handler at `/etc/qubes/rpc/pycharm-importer` reads its config from `~/.config/pycash.json` on pim | same |
+| qrexec service | Handler at `/etc/qubes/rpc/pycharm-importer` reads its config from `~/.config/pycash.json` on client | same |
 
 ### Subcommand: `pycash.List`
 
@@ -157,7 +158,7 @@ Produces JSONL output:
 
 The server emits each line immediately via `sys.stdout.write("\n")` to minimize latency over the qrexec pipe. It flushes every 10 chunks (`flush_every % 10 == 0`).
 
-## pycash-client (financial VM)
+## pycash-client (client VM)
 
 ### Purpose
 
