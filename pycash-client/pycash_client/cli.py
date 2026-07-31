@@ -358,43 +358,53 @@ def do_import(args: argparse.Namespace) -> None:
 
 
 def do_ingest(args: argparse.Namespace) -> None:
+    batch_mode: bool = args.batch
+
     receipts = list_receipts()
     if not receipts:
         print("No receipts to ingest.", file=sys.stderr)
         return
 
+    # Used to signal potential non-zero in batch mode.
+    retval = 0
+
     with tempfile.TemporaryDirectory() as tmpdir:
         preview_dir = Path(tmpdir)
 
         for receipt in receipts:
-            action = "skip"
-            while True:
-                print(f"\nImport '{receipt}'? [y/n/p/q] ", file=sys.stderr, end="")
-                try:
-                    answer = input().strip().lower()
-                except EOFError:
-                    return
+            if not batch_mode:
+                action = "skip"
+                while True:
+                    print(f"\nImport '{receipt}'? [y/n/p/q] ", file=sys.stderr, end="")
+                    try:
+                        answer = input().strip().lower()
+                    except EOFError:
+                        return
 
-                if answer == "q":
-                    return
+                    if answer == "q":
+                        return
 
-                if answer == "p":
-                    _preview_receipt(receipt, preview_dir)
-                    continue  # re-prompt for the same receipt
+                    if answer == "p":
+                        _preview_receipt(receipt, preview_dir)
+                        continue  # re-prompt for the same receipt
 
-                if answer == "y":
-                    action = "import"
+                    if answer == "y":
+                        action = "import"
 
-                break  # leave prompt loop after y or n
+                    break  # leave prompt loop after y or n
 
-            if action != "import":
-                continue  # genuinely skip this receipt
+                if action != "import":
+                    continue  # genuinely skip this receipt
 
             try:
                 do_import(argparse.Namespace(filename=receipt))
             except Exception as e:
                 print(f"Import of {receipt} failed: {e}", file=sys.stderr)
-                sys.exit(1)
+                if batch_mode:  # defer error exit to later
+                    retval = 1
+                    continue
+                else:
+                    sys.exit(1)
 
             # Remove from WebDAV only after successful import.
             try:
@@ -404,7 +414,13 @@ def do_ingest(args: argparse.Namespace) -> None:
                     f"Could not remove {receipt} from WebDAV (exit {e.returncode})",
                     file=sys.stderr,
                 )
-                sys.exit(e.returncode)
+                if batch_mode:
+                    retval = e.returncode  # defer error exit to later
+                    continue
+                else:
+                    sys.exit(e.returncode)
+
+    sys.exit(retval)
 
 
 def do_organize(args: argparse.Namespace) -> None:
@@ -459,9 +475,17 @@ def build_parser() -> argparse.ArgumentParser:
         "filename", help="Filename of the receipt file in receipts_dir"
     )
 
-    _ing_cmd = sp.add_parser(
+    ing_cmd = sp.add_parser(
         "ingest",
         help="Batch ingest receipts interactively: process → organize → append → remove",
+    )
+    ing_cmd.add_argument(
+        "--batch",
+        "-b",
+        action="store_true",
+        default=False,
+        dest="batch",
+        help="Non-interactive batch mode: import what it can, skip the rest",
     )
 
     return ap
