@@ -306,7 +306,14 @@ def do_import(args: argparse.Namespace) -> None:
     datestr, reststr = beancount_transaction.split(" ", 1)
     # Take the text after the date, remove the transaction flag and the space next to it,
     # then use the payee and narration to construct a description for the receipt file name.
-    reststr = reststr.splitlines()[0][2:].replace('" "', " — ").replace('"', "")
+    # If there is a comment at the end of the line, strip it too.
+    reststr = (
+        reststr.splitlines()[0][2:]
+        .replace('" "', " — ")
+        .replace('"', "")
+        .split(";")[0]
+        .strip()
+    )
     # Take the text containing the date, and make a date for the receipt file name.
     transdate = date.strptime(datestr, "%Y-%m-%d")  # type: ignore
 
