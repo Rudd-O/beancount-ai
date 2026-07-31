@@ -13,9 +13,9 @@ For security reasons, the software is split into two parts:
    to an Open-WebUI LLM API that will process the receipts and turn them into
    Beancount-formatted transactions.
 
-## Importing receipts
+## Ingesting receipts
 
-Importing of receipts follows this procedure for each receipt the user
+Ingestion of receipts follows this procedure for each receipt the user
 directs the software to handle:
 
 * Process the receipt to create the Beancount transaction record.
@@ -36,6 +36,33 @@ either preview, or ingest, or skip each receipt.
 Batch ingestion of receipts imports the receipts it can, removes the ones
 imported, and skips the receipts that could not be imported, leaving them
 untouched instead of removing them.
+
+## Associating receipts with existing transactions
+
+Receipts on the server side exist that already have transactions recorded
+for them on the client side (this is particularly true for transactions in
+the banking Beancount file, but also true for transactions in the cash
+Beancount file).
+
+This procedure is necessary to organize these receipts, for each receipt
+available to be organized:
+
+* Process the receipt to identify its date and payment amount.
+* Identify candidate transactions on the client that the receipt might
+  correspond to (probably by date and payment amount, maybe with
+  a bit of past/future leeway for dates).
+* Evaluate the candidates to select the transaction that corresponds
+  to the receipt (or perhaps a list of candidates in order of likelihood).
+* Organize the receipt in the same way receipts get organized by the
+  the code today.
+* Add the missing `document:` metadata tag to the transaction, pointing
+  to the organized receipt.
+
+Of note: oftentimes, imported transactions already sport a `document:`
+metadata tag.  It may be worthwhile to explore replacing this `document:`
+tag (which usually points to an import data file) with the organized
+receipt, since the receipt is often more informative than the line of
+data that the import data file contains.
 
 ## Project Structure
 
