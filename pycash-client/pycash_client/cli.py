@@ -40,7 +40,7 @@ class Configuration:
     instance: ClassVar["Configuration | None"] = None
     cfg_path: ClassVar[Path | None] = None  # which file was actually loaded
     target_vm: str | None
-    beancount_folder: str
+    beancount_folder: Path
     beancount_main_file: str
     beancount_transaction_destination_file: str
 
@@ -64,7 +64,7 @@ class Configuration:
         return CONF_DEFAULT
 
     @classmethod
-    def load(cls, override: str | None | None = None) -> "Configuration":
+    def load(cls, override: str | None = None) -> "Configuration":
         """Load and cache the config from the resolved path.
 
         If called multiple times, only the *first* invocation's resolution is used;
@@ -80,13 +80,18 @@ class Configuration:
             data = json.load(fh)
         instance = cls.__new__(cls)
         instance.target_vm = data["target_vm"]
-        instance.beancount_folder = data["beancount_folder"]
+        instance.beancount_folder = Path(data["beancount_folder"])
         instance.beancount_main_file = data["beancount_main_file"]
         instance.beancount_transaction_destination_file = data[
             "beancount_transaction_destination_file"
         ]
         cls.instance = instance
         return cls.instance
+
+    def transaction_destination_path(self) -> Path:
+        return self.beancount_folder / os.path.basename(
+            self.beancount_transaction_destination_file
+        )
 
 
 def shorten_fn(folder: str | Path, fn: str):
@@ -108,148 +113,157 @@ def shorten_fn(folder: str | Path, fn: str):
 # determines *which* program on the target VM is invoked (registered via dom0 policy).
 
 
-def _call_remote(
-    cfg: Configuration,
-    action: str,
-    arg: str | None = None,
-) -> tuple[list[str], subprocess.Popen[bytes], IO[bytes], IO[bytes]]:
-    """Start a remote process and return its Popen handle (with all streams already connected)."""
-    target_vm: str | None = cfg.target_vm
+class RemoteVM:
+    def __init__(self, target_vm: str | None):
+        self.target_vm = target_vm
 
-    if arg is not None:
-        # arguments must be hex
-        arg = arg.encode("utf-8").hex()
+    @classmethod
+    def from_cfg(cls, cfg: Configuration) -> "RemoteVM":
+        return cls(cfg.target_vm)
 
-    # Local fallback for testing: when target_vm is None, invoke pycash-server directly.
-    if target_vm is None:
-        cmd = ["pycash-server", "--config", str(Configuration.cfg_path)]
+    def _call(
+        self,
+        action: str,
+        arg: str | None = None,
+    ) -> tuple[list[str], subprocess.Popen[bytes], IO[bytes], IO[bytes]]:
+        """Start a remote process and return its Popen handle (with all streams already connected)."""
         if arg is not None:
-            cmd.extend([action, arg])
+            # arguments must be hex
+            arg = arg.encode("utf-8").hex()
+
+        # Local fallback for testing: when target_vm is None, invoke pycash-server directly.
+        if self.target_vm is None:
+            cmd = ["pycash-server", "--config", str(Configuration.cfg_path)]
+            if arg is not None:
+                cmd.extend([action, arg])
+            else:
+                cmd.append(action)
         else:
-            cmd.append(action)
-    else:
-        if arg is not None:
-            action = f"{action}+{arg}"
-        cmd = ["qrexec-client-vm", str(target_vm), action]
+            if arg is not None:
+                action = f"{action}+{arg}"
+            cmd = ["qrexec-client-vm", str(self.target_vm), action]
 
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    assert proc.stdin is not None
-    assert proc.stdout is not None
-    return cmd, proc, proc.stdin, proc.stdout
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        assert proc.stdin is not None
+        assert proc.stdout is not None
+        return cmd, proc, proc.stdin, proc.stdout
 
+    def list_receipts(self) -> list[str]:
+        """Return receipt filenames from the server.
 
-def list_receipts(
-    cfg: Configuration,
-) -> list[str]:
-    """Return receipt filenames from the server.
+        Raises on qrexec transport error; prints to stderr and returns ``[]``
+        when the JSON cannot be decoded.
+        """
 
-    Raises on qrexec transport error; prints to stderr and returns ``[]``
-    when the JSON cannot be decoded.
-    """
+        cmd, proc, stdin, stdout = self._call("pycash.List")
+        stdin.close()
 
-    cmd, proc, stdin, stdout = _call_remote(cfg, "pycash.List")
-    stdin.close()
+        read_data = stdout.read()
+        ret = proc.wait()
+        if ret != 0:
+            raise subprocess.CalledProcessError(ret, cmd)
 
-    read_data = stdout.read()
-    ret = proc.wait()
-    if ret != 0:
-        raise subprocess.CalledProcessError(ret, cmd)
+        try:
+            data = json.loads(read_data)
+            mm = [os.path.basename(x) for x in data["receipts"]]
+            assert mm == data["receipts"]
+            return data["receipts"]
+        except Exception as e:
+            print(f"cannot decode server response: {e}", file=sys.stderr)
+            return []
 
-    try:
-        data = json.loads(read_data)
-        mm = [os.path.basename(x) for x in data["receipts"]]
-        assert mm == data["receipts"]
-        return data["receipts"]
-    except Exception as e:
-        print(f"cannot decode server response: {e}", file=sys.stderr)
-        return []
+    def process_receipt(self, filename: str) -> tuple[str, str]:
+        """
+        Calls upon the LLM on the server side to produce a Beancount transaction
+        and the main payment account.
+        """
+        cmd, proc, stdin, stdout = self._call("pycash.Process", arg=filename)
+        stdin.close()
 
+        accumulated: list[str] = []
 
-def process_receipt(cfg: Configuration, filename: str) -> tuple[str, str]:
-    """
-    Calls upon the LLM on the server side to produce a Beancount transaction
-    and the main payment account.
-    """
-    cmd, proc, stdin, stdout = _call_remote(cfg, "pycash.Process", arg=filename)
-    stdin.close()
+        reasoning_over = False
+        for line in stdout:
+            msg = json.loads(line)
 
-    accumulated: list[str] = []
-
-    reasoning_over = False
-    for line in stdout:
-        msg = json.loads(line)
-
-        if err := msg.get("error"):
-            print(err, file=sys.stderr)
-            break
-        elif msg.get("finish"):
-            break
-        elif msg.get("reasoning"):
-            sys.stderr.write(msg["reasoning"])
-            sys.stderr.flush()
-        elif msg.get("output"):
-            if not reasoning_over:
-                sys.stderr.write("\n")
+            if err := msg.get("error"):
+                print(err, file=sys.stderr)
+                break
+            elif msg.get("finish"):
+                break
+            elif msg.get("reasoning"):
+                sys.stderr.write(msg["reasoning"])
                 sys.stderr.flush()
-                reasoning_over = True
-            accumulated.append(msg["output"])
-        else:
-            assert 0, msg
+            elif msg.get("output"):
+                if not reasoning_over:
+                    sys.stderr.write("\n")
+                    sys.stderr.flush()
+                    reasoning_over = True
+                accumulated.append(msg["output"])
+            else:
+                assert 0, msg
 
-    ret = proc.wait()
-    if ret != 0:
-        raise subprocess.CalledProcessError(ret, cmd)
+        ret = proc.wait()
+        if ret != 0:
+            raise subprocess.CalledProcessError(ret, cmd)
 
-    llm_output = "".join(accumulated).strip()
-    llm_output_original = llm_output
+        llm_output = "".join(accumulated).strip()
+        llm_output_original = llm_output
 
-    # Remove Markdown quote formatting from JSON output.
-    llm_output_lines = llm_output.splitlines(True)
-    if llm_output_lines[0].startswith("```"):
-        llm_output_lines = llm_output_lines[1:]
-    if llm_output_lines[-1].startswith("```"):
-        llm_output_lines = llm_output_lines[:-1]
-    llm_output = "".join(llm_output_lines)
+        # Remove Markdown quote formatting from JSON output.
+        llm_output_lines = llm_output.splitlines(True)
+        if llm_output_lines[0].startswith("```"):
+            llm_output_lines = llm_output_lines[1:]
+        if llm_output_lines[-1].startswith("```"):
+            llm_output_lines = llm_output_lines[:-1]
+        llm_output = "".join(llm_output_lines)
 
-    # Fish out first account in the payment accounts list.
-    try:
-        data = json.loads(llm_output)
-    except json.decoder.JSONDecodeError as e:
-        raise Exception(
-            f"Failed decoding expected JSON at end of string: {e}\n{llm_output_original}"
-        )
+        # Fish out first account in the payment accounts list.
+        try:
+            data = json.loads(llm_output)
+        except json.decoder.JSONDecodeError as e:
+            raise Exception(
+                f"Failed decoding expected JSON at end of string: {e}\n{llm_output_original}"
+            )
 
-    try:
-        payment_account = data["payment_accounts"][0]
-    except Exception as e:
-        raise Exception(
-            f"Could not retrieve expense account from LLM output: {e}\n{llm_output_original}"
-        )
+        try:
+            payment_account = data["payment_accounts"][0]
+        except Exception as e:
+            raise Exception(
+                f"Could not retrieve expense account from LLM output: {e}\n{llm_output_original}"
+            )
 
-    try:
-        transaction = data["transaction"]
-    except Exception as e:
-        raise Exception(
-            f"Could not retrieve Beancount transaction from LLM output: {e}\n{llm_output_original}"
-        )
+        try:
+            transaction = data["transaction"]
+        except Exception as e:
+            raise Exception(
+                f"Could not retrieve Beancount transaction from LLM output: {e}\n{llm_output_original}"
+            )
 
-    return transaction, payment_account
+        return transaction, payment_account
 
+    def fetch_receipt(self, filename: str) -> bytes:
+        cmd, proc, stdin, stdout = self._call("pycash.Fetch", arg=filename)
+        stdin.close()
 
-def fetch_receipt(cfg: Configuration, filename: str) -> bytes:
-    cmd, proc, stdin, stdout = _call_remote(cfg, "pycash.Fetch", arg=filename)
-    stdin.close()
+        raw = stdout.read()
+        ret = proc.wait()
+        if ret != 0:
+            raise subprocess.CalledProcessError(ret, cmd)
 
-    raw = stdout.read()
-    ret = proc.wait()
-    if ret != 0:
-        raise subprocess.CalledProcessError(ret, cmd)
+        return raw
 
-    return raw
+    def remove_receipt(self, filename: str) -> None:
+        cmd, proc, stdin, _ = self._call("pycash.Remove", arg=filename)
+        stdin.close()
+
+        ret = proc.wait()
+        if ret != 0:
+            raise subprocess.CalledProcessError(ret, cmd)
 
 
 def predict_receipt_destination_path(
-    cfg: Configuration,
+    beancount_folder: Path,
     transaction_date: date,
     filename: str,
     account: str,
@@ -263,7 +277,7 @@ def predict_receipt_destination_path(
     the requisite transaction date at the beginning of the file name.
     """
     # Construct the final destination folder.  Account folders reside directly under `beancount_folder`.
-    receipt_dir = Path(cfg.beancount_folder) / account.replace(":", "/")
+    receipt_dir = beancount_folder / account.replace(":", "/")
     receipt_dir.mkdir(parents=True, exist_ok=True)
     if description:
         fn = transaction_date.strftime("%Y-%m-%d.") + description + " — " + filename
@@ -281,7 +295,8 @@ def predict_receipt_destination_path(
 
 
 def organize_receipt(
-    cfg: Configuration,
+    beancount_folder: Path,
+    vm: RemoteVM,
     transaction_date: date,
     filename: str,
     account: str,
@@ -295,14 +310,17 @@ def organize_receipt(
     the requisite transaction date at the beginning of the file name.
     """
     receipt_path = predict_receipt_destination_path(
-        cfg, transaction_date, filename, account, description
+        beancount_folder, transaction_date, filename, account, description
     )
-    raw = fetch_receipt(cfg, filename)
+    raw = vm.fetch_receipt(filename)
     receipt_path.write_bytes(raw)
     return receipt_path
 
 
 def insert_document_metadata(transaction_text: str, file_path: str) -> str:
+    """
+    Takes a Beancount transaction and inserts the `file_path` as a document metadata entry.
+    """
     lines = transaction_text.splitlines(True)
     if not lines or lines[0].strip().startswith("#"):
         return transaction_text
@@ -314,7 +332,7 @@ def insert_document_metadata(transaction_text: str, file_path: str) -> str:
 
 def _preview_receipt(cfg: Configuration, filename: str, preview_dir: Path) -> None:
     dest_path = preview_dir / filename
-    dest_path.write_bytes(fetch_receipt(cfg, filename))
+    dest_path.write_bytes(RemoteVM.from_cfg(cfg).fetch_receipt(filename))
     subprocess.Popen(
         ["xdg-open", str(dest_path)],
         stdin=subprocess.DEVNULL,
@@ -324,35 +342,6 @@ def _preview_receipt(cfg: Configuration, filename: str, preview_dir: Path) -> No
     )
 
 
-def do_list(cfg: Configuration, args: argparse.Namespace) -> None:
-    for fname in list_receipts(cfg):
-        print(fname)
-
-
-def do_fetch(cfg: Configuration, args: argparse.Namespace) -> None:
-    gotten = fetch_receipt(cfg, args.filename)
-    Path(args.destination).write_bytes(gotten)
-
-
-def do_remove(cfg: Configuration, args: argparse.Namespace) -> None:
-    cmd, proc, stdin, _ = _call_remote(cfg, "pycash.Remove", arg=args.filename)
-    stdin.close()
-
-    ret = proc.wait()
-    if ret != 0:
-        raise subprocess.CalledProcessError(ret, cmd)
-
-
-def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
-    try:
-        llm_output, account = process_receipt(cfg, args.filename)
-    except subprocess.CalledProcessError as e:
-        sys.exit(e.returncode)
-
-    print(llm_output)
-    print(f"Main account: {account}")
-
-
 class ImportResult:
     receipt_data: bytes
     transaction_text: str
@@ -360,10 +349,16 @@ class ImportResult:
     transaction_destination_path: Path
     rollback_size: int | None = None
 
-    def __init__(self, cfg: Configuration, filename: str) -> None:
-        receipt_data = fetch_receipt(cfg, filename)
+    def __init__(
+        self,
+        vm: RemoteVM,
+        beancount_folder: Path,
+        transaction_destination_path: Path,
+        filename: str,
+    ) -> None:
+        receipt_data = vm.fetch_receipt(filename)
 
-        beancount_transaction, account = process_receipt(cfg, filename)
+        beancount_transaction, account = vm.process_receipt(filename)
         # Strip headline comments and newlines from the transaction.
         while beancount_transaction.lstrip().startswith(";"):
             beancount_transaction = "".join(
@@ -385,7 +380,7 @@ class ImportResult:
         transdate = date.strptime(datestr, "%Y-%m-%d")  # type: ignore
 
         receipt_path = predict_receipt_destination_path(
-            cfg, transdate, filename, account, reststr
+            beancount_folder, transdate, filename, account, reststr
         )
         formatted_tx = insert_document_metadata(
             beancount_transaction, str(receipt_path)
@@ -394,9 +389,7 @@ class ImportResult:
         self.receipt_data = receipt_data
         self.transaction_text = formatted_tx
         self.receipt_destination_path = receipt_path
-        self.transaction_destination_path = Path(
-            cfg.beancount_folder
-        ) / os.path.basename(cfg.beancount_transaction_destination_file)
+        self.transaction_destination_path = transaction_destination_path
 
     def commit(self) -> None:
         dest = self.transaction_destination_path
@@ -453,15 +446,79 @@ class ImportResult:
             raise eee
 
 
+def do_list(cfg: Configuration, args: argparse.Namespace) -> None:
+    """
+    Lists receipt files from the server.
+
+    Exits on success, and if errors are encountered, exits with a non-zero error code.
+    """
+    for fname in RemoteVM.from_cfg(cfg).list_receipts():
+        print(fname)
+
+
+def do_fetch(cfg: Configuration, args: argparse.Namespace) -> None:
+    """
+    Fetches a receipt file from the server and saves it to the file specified in the arguments.
+
+    Exits on success, and if errors are encountered, exits with a non-zero error code.
+    """
+    gotten = RemoteVM.from_cfg(cfg).fetch_receipt(args.filename)
+    Path(args.destination).write_bytes(gotten)
+
+
+def do_remove(cfg: Configuration, args: argparse.Namespace) -> None:
+    """
+    Removes a receipt file from the server.
+
+    Exits on success, and if errors are encountered, exits with a non-zero error code.
+    """
+    RemoteVM.from_cfg(cfg).remove_receipt(args.filename)
+
+
+def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
+    """
+    Processes a receipt file and produces the output of the LLM to stdout.
+
+    Exits on success, and if errors are encountered, exits with a non-zero error code.
+    """
+    try:
+        llm_output, account = RemoteVM.from_cfg(cfg).process_receipt(args.filename)
+    except subprocess.CalledProcessError as e:
+        sys.exit(e.returncode)
+
+    print(llm_output)
+    print(f"Main account: {account}")
+
+
 def do_import(cfg: Configuration, args: argparse.Namespace) -> None:
-    result = ImportResult(cfg, args.filename)
+    """
+    Imports a receipt by creating a Beancount transaction for it, copying the document to
+    the appropriate Beancount document folder, then writing the Beancount transaction to
+    the designated transactions file while associating the transaction with the document.
+
+    Exits on success, and if errors are encountered, exits with a non-zero error code.
+    """
+    result = ImportResult(
+        RemoteVM.from_cfg(cfg),
+        cfg.beancount_folder,
+        cfg.transaction_destination_path(),
+        args.filename,
+    )
     result.commit()
 
 
 def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
+    """
+    Processes all known receipts using the following procedure for each receipt:
+
+    Imports the receipt from the server then, on success, deletes the receipt from the server.
+
+    Exits on success, and if errors are encountered, exits with a non-zero error code.
+    """
     batch_mode: bool = args.batch
 
-    receipts = list_receipts(cfg)
+    vm = RemoteVM.from_cfg(cfg)
+    receipts = vm.list_receipts()
     if not receipts:
         print("No receipts to ingest.", file=sys.stderr)
         return
@@ -499,7 +556,12 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
 
             # Attempt the import.
             try:
-                imp = ImportResult(cfg, receipt)
+                imp = ImportResult(
+                    vm,
+                    cfg.beancount_folder,
+                    cfg.transaction_destination_path(),
+                    receipt,
+                )
             except Exception as e:
                 print(f"Import of {receipt} failed: {e}", file=sys.stderr)
                 if batch_mode:  # defer error exit to later
@@ -549,8 +611,16 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
 
 
 def do_organize(cfg: Configuration, args: argparse.Namespace) -> None:
+    """
+    Copies a receipt to the designated folder for the account under the Beancount folder.
+
+    See `predict_receipt_destination_path` for requirements imposed on Beancount document
+    file naming.
+    """
     tdate = date.strptime(args.date, "%Y-%m-%d")  # type:ignore
-    receipt_path = organize_receipt(cfg, tdate, args.filename, args.account)
+    receipt_path = organize_receipt(
+        cfg.beancount_folder, RemoteVM.from_cfg(cfg), tdate, args.filename, args.account
+    )
     print("The file has been organized into", str(receipt_path), file=sys.stderr)
 
 
