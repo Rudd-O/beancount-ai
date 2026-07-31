@@ -13,7 +13,9 @@ For security reasons, the software is split into two parts:
    to an Open-WebUI LLM API that will process the receipts and turn them into
    Beancount-formatted transactions.
 
-## Ingesting receipts
+## Features
+
+### Ingesting receipts and creating transactions from them
 
 Ingestion of receipts follows this procedure for each receipt the user
 directs the software to handle:
@@ -37,7 +39,7 @@ Batch ingestion of receipts imports the receipts it can, removes the ones
 imported, and skips the receipts that could not be imported, leaving them
 untouched instead of removing them.
 
-## Associating receipts with existing transactions
+### Associating receipts with existing transactions
 
 Receipts on the server side exist that already have transactions recorded
 for them on the client side (this is particularly true for transactions in
@@ -89,7 +91,6 @@ Both programs read `~/.config/pycash.json` for their configuration. This file is
 
 ```json
 {
-  "receipts_dir": "/home/user/receipts",
   "target_vm": "pim",
   "openwebui_url": "https://<server>/",
   "openwebui_token": "<api-key>",
@@ -99,7 +100,6 @@ Both programs read `~/.config/pycash.json` for their configuration. This file is
 
 | Field | Server meaning | Client meaning |
 |---|---|---|
-| `receipts_dir` | Where to scan for receipt files (.jpg, .jpeg, .png, .pdf) | Not used (config loaded only for target_vm) |
 | `target_vm` | Name of the financial VM where pycash-client runs. If null, server invokes `pycash-server` locally via subprocess instead of qrexec. Also supports `--config` / `$PYCASH_CONFIG` overrides. | Name/VM name of the pim VM to talk to. If `null`, client invokes `pycash-server` locally via subprocess for local testing support. Also supports `--config` / `$PYCASH_CONFIG` overrides. |
 | `openwebui_url` | Base URL (with `/v1`) for Open-WebUI REST API | Not used |
 | `openwebui_token` | API key for Open-WebUI authentication | Not used |
@@ -111,6 +111,16 @@ Each program also supports:
 
 Resolution order (highest → lowest): `--config` arg, `$PYCASH_CONFIG` env, `~/.config/pycash.json`.
 
+## Server-client architecture and communication protocol
+
+When server and client are on the same machine (client's `config.json` says `target_vm: null`), then
+client spawns server as subprocess and passes subcommand + command line argument directly, albeit encoding
+argument as hex before invocation.
+
+When server is on another VM, qrexec communication is used, and the service call endpoint becomes
+the subcommand joined with a plus sign to the hex-encoded argument (if needed by the call).
+
+Client has the ability to send stdin to server, and server can respond via stdout.
 ## pycash-server (pim VM)
 
 ### Purpose
@@ -132,11 +142,11 @@ Returns JSON to stdout:
 {"receipts": ["M071225_115439.jpg"], "count": 1}
 ```
 
-On error (e.g., receipts_dir not found), returns `{"error": "..."}` on stderr and exit code 1 on stderr.
+On error (e.g., receipts_ingestion_url not found / down), returns `{"error": "..."}` on stderr and exit code 1.
 
 ### Subcommand: `pycash.Process`
 
-Takes a receipt filename as a positional argument, reads it from `receipts_dir`, base64-encodes the image, embeds the full prompt (`RECEIPT_CONVERSION_PROMPT.md`) + receipt data in a multi-part OpenAI compatible message (text_part + image_part), and submits it to Open-WebUI via the `openwebui-client` library.
+Takes a receipt filename as a positional argument, reads it from `receipts_ingestion_url`, base64-encodes the image, embeds the full prompt (`RECEIPT_CONVERSION_PROMPT.md`) + receipt data in a multi-part OpenAI compatible message (text_part + image_part), and submits it to Open-WebUI via the `openwebui-client` library.
 
 Uses an explicit `httpx.Client(verify=<system_ca_bundle>/certifi.where())` to support self-signed/internal CAs. The system CA bundle is determined by `ssl.get_default_verify_paths().cafile` (on RHEL/Fedora this resolves to `/etc/pki/tls/cert.pem`).
 
@@ -147,44 +157,22 @@ Produces JSONL output:
 
 The server emits each line immediately via `sys.stdout.write("\n")` to minimize latency over the qrexec pipe. It flushes every 10 chunks (`flush_every % 10 == 0`).
 
-### Processing flow (server side)
-
-```
-pycash-server pycash.Process <receipt_filename>
-    ↓
-read receipts_dir/<filename>
-base64 → embed in image_part + text_part with prompt
-→ OpenWebUIClient.chat.completions.create(stream=True)
-→ iterate Stream[ChatCompletionChunk], emitting JSON deltas
-```
-
 ## pycash-client (financial VM)
 
 ### Purpose
 
-CLI tool that communicates with `pycash-server` on pim to orchestrate receipt list retrieval and individual receipt processing. It abstracts away the transport layer entirely from the end user.
-
-Invocation paths:
-1. qvm-run financial "pycash-client ..."  (for interactive testing)
-2. via qrexec handler at `/etc/qubes/rpc/pycharm-importer` (production use on pim)
+CLI tool that communicates with `pycash-server` (either locally or on another VM via qrexec)
+to orchestrate receipt list retrieval and individual receipt processing.
+It abstracts away the transport layer entirely from the end user.
 
 ### Subcommand: `list**
 
 Invokes `pycash-server pycash.List` via the configured transport, then prints one receipt filename per line to stdout.
 
-Transport selection logic in `_call_remote`:
-- If `target_vm` is non-null in config → uses `qrexec-client-vm <target_vm> <action>`
-- If `target_vm` is null → spawns `pycash-server pycash.List --config <path>` locally via subprocess (used for local testing with `test-config.json`)
-
 ### Subcommand: `process`
 
-Invokes `pycash-server pycash.Process+<filename>` on pim (qrexec wire protocol) or `pycash-server pycash.Process <filename>` (local fallback). Reads the remote JSONL stream line-by-line, prints reasoning chunks to stderr as they arrive via qrexec/stdout pipe. Stops processing when either `{"finish": ...}` or `error` is received. Accumulates all `{"output": ...}` delta chunks and joins them into a single string which is printed to stdout at the end.
-
-Transport selection logic in `_call_remote`:
-- If `target_vm` is non-null in config → uses `qrexexec-client-vm <target_vm> pycash.List` qrexec wire protocol splits on the + sign: `"pycash.Process+FILENAME"` becomes `<action>=<filename>` on the client side sends the base64-encoded receipt file to pim's receipts_dir, and submits it to Open-WebUI.
-
-
-## Current Status
-
-Implementing. `--config` works for both projects. Local testing supported via `test-config.json`.
-
+Taking the name of a receipt, it invokes `pycash-server pycash.Process+<filename>` on the server.
+Reads the remote JSONL stream line-by-line, prints reasoning chunks to stderr as they arrive.
+Stops processing when either `{"finish": ...}` or `error` is received. Accumulates all
+`{"output": ...}` delta chunks and joins them into a single string which is printed to stdout
+at the end.

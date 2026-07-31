@@ -27,15 +27,14 @@ PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
 
 
 class Configuration(TypedDict):
-    receipts_dir: str  # deprecated — use WebDAV fields for new configs
     openwebui_url: str
     openwebui_token: str
     openwebui_model: str
 
-    # WebDAV credentials (preferred over receipts_dir for new configs)
-    receipts_url: str
+    # WebDAV data sources and credentials
     receipts_username: str
     receipts_password: str
+    receipts_ingestion_url: str
 
 
 _cfg: Configuration | None = None  # cached config loaded from resolved path
@@ -86,7 +85,7 @@ _EXT = frozenset((".jpg", ".jpeg", ".png", ".pdf"))
 def do_list(args: argparse.Namespace) -> None:
     cfg = get_cfg()
 
-    url = cfg["receipts_url"]
+    url = cfg["receipts_ingestion_url"]
     username = cfg["receipts_username"]
     password = cfg["receipts_password"]
 
@@ -145,7 +144,7 @@ def do_process(args: argparse.Namespace) -> None:
 
     cfg = get_cfg()
 
-    url = cfg["receipts_url"]
+    url = cfg["receipts_ingestion_url"]
     username = cfg["receipts_username"]
     password = cfg["receipts_password"]
 
@@ -266,7 +265,7 @@ def do_process(args: argparse.Namespace) -> None:
 def do_fetch(args: argparse.Namespace) -> None:
     cfg = get_cfg()
 
-    url = cfg["receipts_url"]
+    url = cfg["receipts_ingestion_url"]
     username = cfg["receipts_username"]
     password = cfg["receipts_password"]
 
@@ -290,7 +289,7 @@ def do_fetch(args: argparse.Namespace) -> None:
 def do_remove(args: argparse.Namespace) -> None:
     cfg = get_cfg()
 
-    url = cfg["receipts_url"]
+    url = cfg["receipts_ingestion_url"]
     username = cfg["receipts_username"]
     password = cfg["receipts_password"]
 
@@ -332,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch_cmd.add_argument(
         "filename",
-        help="Filename of the receipt file in receipts_dir (encoded as hex)",
+        help="Filename of the receipt (encoded as hex)",
     )
 
     remove_cmd = sp.add_parser(
@@ -340,7 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     remove_cmd.add_argument(
         "filename",
-        help="Filename of the receipt file in receipts_dir (encoded as hex)",
+        help="Filename of the receipt (encoded as hex)",
     )
 
     process_cmd = sp.add_parser(
@@ -348,7 +347,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     process_cmd.add_argument(
         "filename",
-        help="Filename of the receipt file in receipts_dir (encoded as hex)",
+        help="Filename of the receipt (encoded as hex)",
     )
 
     return ap
