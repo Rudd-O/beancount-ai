@@ -15,7 +15,7 @@ import sys
 import tempfile
 from datetime import date
 from pathlib import Path
-from typing import TypedDict, cast, IO
+from typing import ClassVar, IO
 
 
 CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
@@ -24,64 +24,73 @@ CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
 # -- configuration ---------------------------------------------------------
 
 
-class Configuration(TypedDict):
+class Configuration:
     """Configuration loaded from a pycash JSON config file.
 
-    Keys:
-        target_vm: Name of the Qubes VM where pycash-server runs (`None` to spawn the server on-demand locally).
+    Singleton that caches its first loaded instance at the class level.
+    Use :meth:`load` to retrieve or initialise it.
+
+    Attributes:
+        target_vm: Name of the Qubes VM where pycash-server runs (None to spawn locally).
         beancount_folder: Root directory of the Beancount project.
-        beancount_main_file: Path to the main Beancount ledger file relative to `beancount_folder` (e.g. `main.bean`).
-        beancount_transaction_destination_file: Filename to append ingested transactions to (e.g. `cash.bean`).
+        beancount_main_file: Path to the main Beancount ledger file relative to ``beancount_folder``.
+        beancount_transaction_destination_file: Filename to append ingested transactions to.
     """
 
+    instance: ClassVar["Configuration | None"] = None
+    cfg_path: ClassVar[Path | None] = None  # which file was actually loaded
     target_vm: str | None
     beancount_folder: str
     beancount_main_file: str
     beancount_transaction_destination_file: str
 
+    def __init__(self) -> None:
+        raise NotImplementedError("Use Configuration.load() to obtain an instance")
 
-_cfg: Configuration | None = None
-_cfg_path: Path | None = None  # which file was actually loaded
+    @classmethod
+    def _get_cfg_path(cls, override: str | None) -> Path:
+        """Return the config file path, resolving overrides in order of priority.
 
-_cfg_override: str | None = None  # set by --config before get_cfg() is called
+        Priority (highest → lowest):
+            1. ``--config`` CLI argument
+            2. ``PYCASH_CONFIG`` environment variable
+            3. Default ``~/.config/pycash.json``
+        """
+        if override:
+            return Path(override)
+        env_cfg = os.environ.get("PYCASH_CONFIG")
+        if env_cfg:
+            return Path(env_cfg)
+        return CONF_DEFAULT
 
+    @classmethod
+    def load(cls, override: str | None | None = None) -> "Configuration":
+        """Load and cache the config from the resolved path.
 
-def _get_cfg_path(override: str | None) -> Path:
-    """Return the config file path, resolving overrides in order of priority.
+        If called multiple times, only the *first* invocation's resolution is used;
+        subsequent calls return the cached result (prevents a user from accidentally
+        reloading with different paths within one process).
+        """
+        if cls.instance is not None:
+            return cls.instance
 
-    Priority (highest → lowest):
-        1. ``--config`` CLI argument
-        2. ``PYCASH_CONFIG`` environment variable
-        3. Default ``~/.config/pycash.json``
-    """
-    if override:
-        return Path(override)
-    env_cfg = os.environ.get("PYCASH_CONFIG")
-    if env_cfg:
-        return Path(env_cfg)
-    return CONF_DEFAULT
-
-
-def get_cfg() -> Configuration:
-    """Load and cache the config from the resolved path.
-
-    If called multiple times, only the *first* invocation's resolution is used;
-    subsequent calls return the cached result (prevents a user from accidentally
-    reloading with different paths within one process).
-    """
-    global _cfg, _cfg_path
-    if _cfg is not None:
-        return _cfg
-
-    fp = _get_cfg_path(_cfg_override)
-    with open(fp) as fh:
-        _cfg = cast(Configuration, json.load(fh))
-    _cfg_path = fp
-    return _cfg
+        fp = cls._get_cfg_path(override)
+        cls.cfg_path = fp
+        with open(fp) as fh:
+            data = json.load(fh)
+        instance = cls.__new__(cls)
+        instance.target_vm = data["target_vm"]
+        instance.beancount_folder = data["beancount_folder"]
+        instance.beancount_main_file = data["beancount_main_file"]
+        instance.beancount_transaction_destination_file = data[
+            "beancount_transaction_destination_file"
+        ]
+        cls.instance = instance
+        return cls.instance
 
 
 def shorten_fn(folder: str | Path, fn: str):
-    # Reduce max path length without affecting the file name extension.
+    """Reduce max path length without affecting the file name extension."""
     maxlen = os.pathconf(folder, "PC_NAME_MAX")
     # Sarn, we only handle UTF-8 file systems.  Maybe this would be good to fix in the future.
     while len(fn.encode("utf-8")) > maxlen:
@@ -100,12 +109,12 @@ def shorten_fn(folder: str | Path, fn: str):
 
 
 def _call_remote(
+    cfg: Configuration,
     action: str,
     arg: str | None = None,
 ) -> tuple[list[str], subprocess.Popen[bytes], IO[bytes], IO[bytes]]:
     """Start a remote process and return its Popen handle (with all streams already connected)."""
-    cfg = get_cfg()
-    target_vm: str | None = cfg["target_vm"]
+    target_vm: str | None = cfg.target_vm
 
     if arg is not None:
         # arguments must be hex
@@ -113,7 +122,7 @@ def _call_remote(
 
     # Local fallback for testing: when target_vm is None, invoke pycash-server directly.
     if target_vm is None:
-        cmd = ["pycash-server", "--config", str(_cfg_path)]
+        cmd = ["pycash-server", "--config", str(Configuration.cfg_path)]
         if arg is not None:
             cmd.extend([action, arg])
         else:
@@ -129,14 +138,16 @@ def _call_remote(
     return cmd, proc, proc.stdin, proc.stdout
 
 
-def list_receipts() -> list[str]:
+def list_receipts(
+    cfg: Configuration,
+) -> list[str]:
     """Return receipt filenames from the server.
 
     Raises on qrexec transport error; prints to stderr and returns ``[]``
     when the JSON cannot be decoded.
     """
 
-    cmd, proc, stdin, stdout = _call_remote("pycash.List")
+    cmd, proc, stdin, stdout = _call_remote(cfg, "pycash.List")
     stdin.close()
 
     read_data = stdout.read()
@@ -154,12 +165,12 @@ def list_receipts() -> list[str]:
         return []
 
 
-def process_receipt(filename: str) -> tuple[str, str]:
+def process_receipt(cfg: Configuration, filename: str) -> tuple[str, str]:
     """
     Calls upon the LLM on the server side to produce a Beancount transaction
     and the main payment account.
     """
-    cmd, proc, stdin, stdout = _call_remote("pycash.Process", arg=filename)
+    cmd, proc, stdin, stdout = _call_remote(cfg, "pycash.Process", arg=filename)
     stdin.close()
 
     accumulated: list[str] = []
@@ -225,8 +236,8 @@ def process_receipt(filename: str) -> tuple[str, str]:
     return transaction, payment_account
 
 
-def fetch_receipt(filename: str) -> bytes:
-    cmd, proc, stdin, stdout = _call_remote("pycash.Fetch", arg=filename)
+def fetch_receipt(cfg: Configuration, filename: str) -> bytes:
+    cmd, proc, stdin, stdout = _call_remote(cfg, "pycash.Fetch", arg=filename)
     stdin.close()
 
     raw = stdout.read()
@@ -238,6 +249,7 @@ def fetch_receipt(filename: str) -> bytes:
 
 
 def predict_receipt_destination_path(
+    cfg: Configuration,
     transaction_date: date,
     filename: str,
     account: str,
@@ -250,10 +262,8 @@ def predict_receipt_destination_path(
     the requirement that it must begin with a date in Y-m-d format.  Hence
     the requisite transaction date at the beginning of the file name.
     """
-    cfg = get_cfg()
-
     # Construct the final destination folder.  Account folders reside directly under `beancount_folder`.
-    receipt_dir = Path(cfg["beancount_folder"]) / account.replace(":", "/")
+    receipt_dir = Path(cfg.beancount_folder) / account.replace(":", "/")
     receipt_dir.mkdir(parents=True, exist_ok=True)
     if description:
         fn = transaction_date.strftime("%Y-%m-%d.") + description + " — " + filename
@@ -271,6 +281,7 @@ def predict_receipt_destination_path(
 
 
 def organize_receipt(
+    cfg: Configuration,
     transaction_date: date,
     filename: str,
     account: str,
@@ -284,9 +295,9 @@ def organize_receipt(
     the requisite transaction date at the beginning of the file name.
     """
     receipt_path = predict_receipt_destination_path(
-        transaction_date, filename, account, description
+        cfg, transaction_date, filename, account, description
     )
-    raw = fetch_receipt(filename)
+    raw = fetch_receipt(cfg, filename)
     receipt_path.write_bytes(raw)
     return receipt_path
 
@@ -301,9 +312,9 @@ def insert_document_metadata(transaction_text: str, file_path: str) -> str:
     return "".join(lines)
 
 
-def _preview_receipt(filename: str, preview_dir: Path) -> None:
+def _preview_receipt(cfg: Configuration, filename: str, preview_dir: Path) -> None:
     dest_path = preview_dir / filename
-    dest_path.write_bytes(fetch_receipt(filename))
+    dest_path.write_bytes(fetch_receipt(cfg, filename))
     subprocess.Popen(
         ["xdg-open", str(dest_path)],
         stdin=subprocess.DEVNULL,
@@ -313,18 +324,18 @@ def _preview_receipt(filename: str, preview_dir: Path) -> None:
     )
 
 
-def do_list(_args: argparse.Namespace) -> None:
-    for fname in list_receipts():
+def do_list(cfg: Configuration, args: argparse.Namespace) -> None:
+    for fname in list_receipts(cfg):
         print(fname)
 
 
-def do_fetch(args: argparse.Namespace) -> None:
-    gotten = fetch_receipt(args.filename)
+def do_fetch(cfg: Configuration, args: argparse.Namespace) -> None:
+    gotten = fetch_receipt(cfg, args.filename)
     Path(args.destination).write_bytes(gotten)
 
 
-def do_remove(args: argparse.Namespace) -> None:
-    cmd, proc, stdin, _ = _call_remote("pycash.Remove", arg=args.filename)
+def do_remove(cfg: Configuration, args: argparse.Namespace) -> None:
+    cmd, proc, stdin, _ = _call_remote(cfg, "pycash.Remove", arg=args.filename)
     stdin.close()
 
     ret = proc.wait()
@@ -332,9 +343,9 @@ def do_remove(args: argparse.Namespace) -> None:
         raise subprocess.CalledProcessError(ret, cmd)
 
 
-def do_process(args: argparse.Namespace) -> None:
+def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
     try:
-        llm_output, account = process_receipt(args.filename)
+        llm_output, account = process_receipt(cfg, args.filename)
     except subprocess.CalledProcessError as e:
         sys.exit(e.returncode)
 
@@ -349,12 +360,10 @@ class ImportResult:
     transaction_destination_path: Path
     rollback_size: int | None = None
 
-    def __init__(self, filename: str) -> None:
-        cfg = get_cfg()
+    def __init__(self, cfg: Configuration, filename: str) -> None:
+        receipt_data = fetch_receipt(cfg, filename)
 
-        receipt_data = fetch_receipt(filename)
-
-        beancount_transaction, account = process_receipt(filename)
+        beancount_transaction, account = process_receipt(cfg, filename)
         # Strip headline comments and newlines from the transaction.
         while beancount_transaction.lstrip().startswith(";"):
             beancount_transaction = "".join(
@@ -376,7 +385,7 @@ class ImportResult:
         transdate = date.strptime(datestr, "%Y-%m-%d")  # type: ignore
 
         receipt_path = predict_receipt_destination_path(
-            transdate, filename, account, reststr
+            cfg, transdate, filename, account, reststr
         )
         formatted_tx = insert_document_metadata(
             beancount_transaction, str(receipt_path)
@@ -386,8 +395,8 @@ class ImportResult:
         self.transaction_text = formatted_tx
         self.receipt_destination_path = receipt_path
         self.transaction_destination_path = Path(
-            cfg["beancount_folder"]
-        ) / os.path.basename(cfg["beancount_transaction_destination_file"])
+            cfg.beancount_folder
+        ) / os.path.basename(cfg.beancount_transaction_destination_file)
 
     def commit(self) -> None:
         dest = self.transaction_destination_path
@@ -444,15 +453,15 @@ class ImportResult:
             raise eee
 
 
-def do_import(args: argparse.Namespace) -> None:
-    result = ImportResult(args.filename)
+def do_import(cfg: Configuration, args: argparse.Namespace) -> None:
+    result = ImportResult(cfg, args.filename)
     result.commit()
 
 
-def do_ingest(args: argparse.Namespace) -> None:
+def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
     batch_mode: bool = args.batch
 
-    receipts = list_receipts()
+    receipts = list_receipts(cfg)
     if not receipts:
         print("No receipts to ingest.", file=sys.stderr)
         return
@@ -477,7 +486,7 @@ def do_ingest(args: argparse.Namespace) -> None:
                         return
 
                     if answer == "p":
-                        _preview_receipt(receipt, preview_dir)
+                        _preview_receipt(cfg, receipt, preview_dir)
                         continue  # re-prompt for the same receipt
 
                     if answer == "y":
@@ -490,7 +499,7 @@ def do_ingest(args: argparse.Namespace) -> None:
 
             # Attempt the import.
             try:
-                imp = ImportResult(receipt)
+                imp = ImportResult(cfg, receipt)
             except Exception as e:
                 print(f"Import of {receipt} failed: {e}", file=sys.stderr)
                 if batch_mode:  # defer error exit to later
@@ -512,7 +521,7 @@ def do_ingest(args: argparse.Namespace) -> None:
 
             # Remove from WebDAV only after successful import.
             try:
-                do_remove(argparse.Namespace(filename=receipt))
+                do_remove(cfg, argparse.Namespace(filename=receipt))
             except Exception as e:
                 print(
                     f"Could not remove {receipt} from WebDAV: {e}",
@@ -539,9 +548,9 @@ def do_ingest(args: argparse.Namespace) -> None:
     sys.exit(retval)
 
 
-def do_organize(args: argparse.Namespace) -> None:
+def do_organize(cfg: Configuration, args: argparse.Namespace) -> None:
     tdate = date.strptime(args.date, "%Y-%m-%d")  # type:ignore
-    receipt_path = organize_receipt(tdate, args.filename, args.account)
+    receipt_path = organize_receipt(cfg, tdate, args.filename, args.account)
     print("The file has been organized into", str(receipt_path), file=sys.stderr)
 
 
@@ -604,14 +613,13 @@ def main() -> None:
     ap = build_parser()
     args = ap.parse_args()
 
-    _cfg_override = args.conf_path  # set it once for downstream calls to get_cfg()
-    _cfg = None  # ensure fresh start if already cached (reload from --config path)
+    cfg = Configuration.load(args.conf_path)
 
     if not args.command:
         ap.print_help(sys.stderr)
         sys.exit(1)
 
-    dispatch = {  # type:ignore
+    dispatch = {
         "list": do_list,
         "fetch": do_fetch,
         "import": do_import,
@@ -620,7 +628,7 @@ def main() -> None:
         "process": do_process,
         "remove": do_remove,
     }
-    dispatch[args.command](args)
+    dispatch[args.command](cfg, args)
 
 
 if __name__ == "__main__":

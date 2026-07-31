@@ -14,7 +14,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import cast, TypedDict
+from typing import ClassVar, TypedDict, cast
 from webdav4.client import Client  # type:ignore
 
 from .pdf import render_pdf_pages_to_png
@@ -26,10 +26,13 @@ PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
 # -- configuration ---------------------------------------------------------
 
 
-class Configuration(TypedDict):
+class Configuration:
     """Configuration loaded from a pycash JSON config file.
 
-    Keys:
+    Singleton that caches its first loaded instance at the class level.
+    Use :meth:`load` to retrieve or initialise it.
+
+    Attributes:
         openwebui_url: Base URL of the Open-WebUI instance for receipt processing.
         openwebui_token: API token for authenticating with the Open-WebUI instance.
         openwebui_model: Model name to use via the Open-WebUI instance.
@@ -37,6 +40,9 @@ class Configuration(TypedDict):
         receipts_password: WebDAV password for the receipts data source.
         receipts_ingestion_url: WebDAV URL where receipt files to be ingested are stored.
     """
+
+    instance: ClassVar["Configuration | None"] = None
+    cfg_path: ClassVar[Path | None] = None  # which file was actually loaded
 
     openwebui_url: str
     openwebui_token: str
@@ -47,45 +53,49 @@ class Configuration(TypedDict):
     receipts_password: str
     receipts_ingestion_url: str
 
+    def __init__(self) -> None:
+        raise NotImplementedError("Use Configuration.load() to obtain an instance")
 
-_cfg: Configuration | None = None  # cached config loaded from resolved path
-_cfg_path: Path | None = None  # which file was actually loaded
+    @classmethod
+    def _get_cfg_path(cls, override: str | None) -> Path:
+        """Return the config file path, resolving overrides in order of priority.
 
-_cfg_override: str | None = None  # set by --config before get_cfg() is called
+        Priority (highest → lowest):
+            1. ``--config`` CLI argument
+            2. ``PYCASH_CONFIG`` environment variable
+            3. Default ``~/.config/pycash.json``
+        """
+        if override:
+            return Path(override)
+        env_cfg = os.environ.get("PYCASH_CONFIG")
+        if env_cfg:
+            return Path(env_cfg)
+        return CONF_DEFAULT
 
+    @classmethod
+    def load(cls, override: str | None | None = None) -> "Configuration":
+        """Load and cache the config from the resolved path.
 
-def _get_cfg_path(override: str | None) -> Path:
-    """Return the config file path, resolving overrides in order of priority.
+        If called multiple times, only the *first* invocation's resolution is used;
+        subsequent calls return the cached result (prevents a user from accidentally
+        reloading with different paths within one process).
+        """
+        if cls.instance is not None:
+            return cls.instance
 
-    Priority (highest → lowest):
-        1. ``--config`` CLI argument
-        2. ``PYCASH_CONFIG`` environment variable
-        3. Default ``~/.config/pycash.json``
-    """
-    if override:
-        return Path(override)
-    env_cfg = os.environ.get("PYCASH_CONFIG")
-    if env_cfg:
-        return Path(env_cfg)
-    return CONF_DEFAULT
-
-
-def get_cfg() -> Configuration:
-    """Load and cache the config from the resolved path.
-
-    If called multiple times, only the *first* invocation's resolution is used;
-    subsequent calls return the cached result (prevents a user from accidentally
-    reloading with different paths within one process).
-    """
-    global _cfg, _cfg_path
-    if _cfg is not None:
-        return _cfg
-
-    fp = _get_cfg_path(_cfg_override)
-    with open(fp) as fh:
-        _cfg = cast(Configuration, json.load(fh))
-    _cfg_path = fp
-    return _cfg
+        fp = cls._get_cfg_path(override)
+        cls.cfg_path = fp
+        with open(fp) as fh:
+            data = json.load(fh)
+        instance = cls.__new__(cls)
+        instance.openwebui_url = data["openwebui_url"]
+        instance.openwebui_token = data["openwebui_token"]
+        instance.openwebui_model = data["openwebui_model"]
+        instance.receipts_username = data["receipts_username"]
+        instance.receipts_password = data["receipts_password"]
+        instance.receipts_ingestion_url = data["receipts_ingestion_url"]
+        cls.instance = instance
+        return cls.instance
 
 
 # -- subcommands -----------------------------------------------------------
@@ -93,12 +103,10 @@ def get_cfg() -> Configuration:
 _EXT = frozenset((".jpg", ".jpeg", ".png", ".pdf"))
 
 
-def do_list(args: argparse.Namespace) -> None:
-    cfg = get_cfg()
-
-    url = cfg["receipts_ingestion_url"]
-    username = cfg["receipts_username"]
-    password = cfg["receipts_password"]
+def do_list(cfg: Configuration, args: argparse.Namespace) -> None:
+    url = cfg.receipts_ingestion_url
+    username = cfg.receipts_username
+    password = cfg.receipts_password
 
     client = Client(url, auth=(username, password))
 
@@ -138,7 +146,7 @@ def do_list(args: argparse.Namespace) -> None:
     )
 
 
-def do_process(args: argparse.Namespace) -> None:
+def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
     import base64
     import ssl
 
@@ -153,11 +161,9 @@ def do_process(args: argparse.Namespace) -> None:
     from httpx import Client as HttpxClient
     from openwebui_client import OpenWebUIClient
 
-    cfg = get_cfg()
-
-    url = cfg["receipts_ingestion_url"]
-    username = cfg["receipts_username"]
-    password = cfg["receipts_password"]
+    url = cfg.receipts_ingestion_url
+    username = cfg.receipts_username
+    password = cfg.receipts_password
 
     argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
     fn = os.path.basename(argsfilename)
@@ -187,8 +193,8 @@ def do_process(args: argparse.Namespace) -> None:
         verify = certifi.where()
 
     client = OpenWebUIClient(
-        api_key=cfg["openwebui_token"],
-        base_url=cfg["openwebui_url"],
+        api_key=cfg.openwebui_token,
+        base_url=cfg.openwebui_url,
         http_client=HttpxClient(verify=verify),
     )
 
@@ -246,7 +252,7 @@ def do_process(args: argparse.Namespace) -> None:
     ]
 
     resp = client.chat.completions.create(
-        model=cfg["openwebui_model"],
+        model=cfg.openwebui_model,
         messages=messages,
         stream=True,
     )
@@ -273,12 +279,10 @@ def do_process(args: argparse.Namespace) -> None:
             sys.stdout.flush()
 
 
-def do_fetch(args: argparse.Namespace) -> None:
-    cfg = get_cfg()
-
-    url = cfg["receipts_ingestion_url"]
-    username = cfg["receipts_username"]
-    password = cfg["receipts_password"]
+def do_fetch(cfg: Configuration, args: argparse.Namespace) -> None:
+    url = cfg.receipts_ingestion_url
+    username = cfg.receipts_username
+    password = cfg.receipts_password
 
     fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
     webdav_client = Client(url, auth=(username, password))
@@ -297,12 +301,10 @@ def do_fetch(args: argparse.Namespace) -> None:
     sys.stdout.buffer.flush()
 
 
-def do_remove(args: argparse.Namespace) -> None:
-    cfg = get_cfg()
-
-    url = cfg["receipts_ingestion_url"]
-    username = cfg["receipts_username"]
-    password = cfg["receipts_password"]
+def do_remove(cfg: Configuration, args: argparse.Namespace) -> None:
+    url = cfg.receipts_ingestion_url
+    username = cfg.receipts_username
+    password = cfg.receipts_password
 
     fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
     webdav_client = Client(url, auth=(username, password))
@@ -367,7 +369,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     import sys
 
-    global _cfg_override  # override resolved by --config before any get_cfg() call
     ap = build_parser()
     args = ap.parse_args()
 
@@ -375,8 +376,7 @@ def main() -> None:
         ap.print_help(sys.stderr)
         sys.exit(1)
 
-    _cfg_override = args.conf_path  # set it once for downstream calls to get_cfg()
-    _cfg = None  # ensure fresh start if already cached (reload from --config path)
+    cfg = Configuration.load(args.conf_path)
 
     dispatch = {
         "pycash.List": do_list,
@@ -389,7 +389,7 @@ def main() -> None:
         ap.print_help(sys.stderr)
         sys.exit(1)
 
-    handler(args)
+    handler(cfg, args)
 
 
 if __name__ == "__main__":
