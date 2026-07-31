@@ -30,6 +30,13 @@ directs the software to handle:
 * Finally, and only if all the prior steps are successful, the software will
   remove the receipt.
 
+Interactive ingestion of receipts goes one by one, asking the user to
+either preview, or ingest, or skip each receipt.
+
+Batch ingestion of receipts imports the receipts it can, removes the ones
+imported, and skips the receipts that could not be imported, leaving them
+untouched instead of removing them.
+
 ## Project Structure
 
 The repository contains two independent Python packages:
