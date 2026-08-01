@@ -1,0 +1,102 @@
+# AGENTS.md — cash-receipt-importer
+
+## Structure
+
+```
+cash-receipt-importer/
+├── docs/*.md                                  # general documentation of the program, features, commands, and use
+└── docs/specs/…                               # specs for features in development
+│
+├── pycash-server/                             # Runs on server VM which has access to receipts and LLM
+│   ├── pyproject.toml                         # entry-point: pycash-server = ...cli:main
+│   └── pycash_server/cli.py                   # pycash.List + pycash.Process subcommands
+│   └── pycash-server/pdf.py                   # PDF→PNG conversion for receipt images
+│   └── pycash-server/*_PROMPT.md              # prompts for LLMs
+│
+└── pycash-client/                             # Runs on client VM which has Beancount data
+    ├── pyproject.toml                         # entry-point: pycash-client = ...cli:main
+    └── pycash_client/cli.py                   # list + process subcommands → calls server via qrexec/local
+```
+
+Two independent setuptools packages
+
+For now, no test framework, no lint/typecheck config, no CI.  This can be improved in the future.
+
+## How to run
+
+**pycash-server** — runs on the VM that has receipt files + LLM access. CLI subcommands:
+- `pycash-server pycash.List -d <receipts-dir>`  lists receipts as JSON
+- `pycash-server pycash.Process <filename>`        processes one receipt via Open-WebUI (produces JSONL output)
+
+**pycash-client** — runs on the VM with Beancount data. CLI subcommands:
+- `pycash-client list`        → prints receipt filenames (one per line)
+- `pycash-client process <file>` → streams LLM response, prints parsed Beancount tx to stdout
+
+Default config: `~/.config/pycash.json`. Both clients also support `--config <path>` and `$PYCASH_CONFIG`.
+
+**Local testing**: set `"target_vm": null` in config so the client spawns the server as a subprocess (arguments hex-encoded just as if the server were running in a separate VM).
+
+## Configuration (`~/.config/pycash.json`)
+
+Both programs read from the same config file by default `~/.config/pycash.json` (but see below for more).
+
+### Server configuration fields
+
+| Field | Type | Description |
+|---|---|---|
+| `openwebui_url` | `str` | Base URL (with `/v1`) for Open-WebUI REST API |
+| `openwebui_token` | `str` | API key for Open-WebUI authentication |
+| `openwebui_model` | `str` | Model ID to use for the LLM request to Open-WebUI |
+| `receipts_username` | `str` | WebDAV username for the receipts data source |
+| `receipts_password` | `str` | WebDAV password for the receipts data source |
+| `receipts_ingestion_url` | `str` | WebDAV URL where receipt files to be ingested are stored |
+
+### Client configuration fields
+
+| Field | Type | Description |
+|---|---|---|
+| `target_vm` | `str \| null` | Name of the Qubes VM where pycash-server runs. If `null`, client invokes `pycash-server` locally via subprocess for local testing support. |
+| `beancount_folder` | `Path` | Root directory of the Beancount project |
+| `beancount_main_file` | `str` | Path to the main Beancount ledger file relative to ``beancount_folder`` |
+| `beancount_transaction_destination_file` | `str` | Filename to append ingested transactions to |
+
+### Configuration resolution order
+
+1. `--config <path>` CLI flag
+2. `$PYCASH_CONFIG` env var
+3. Default `~/.config/pycash.json`
+
+First match wins; subsequent calls to `Configuration.load()` are cached.
+
+## Server-client transport
+
+For security reasons, the software is split into two parts:
+
+1. The client: runs on the virtual machine dedicated to accounting, where all the
+   Beancount files reside.
+2. The server: runs on the virtual machine that has the receipts, and also access
+   to an Open-WebUI LLM API that will process the receipts and turn them into
+   Beancount-formatted transactions.
+
+- **Same host** (`target_vm: null`): client spawns server via subprocess, passes hex-encoded subcommand + args.
+- **Different VM** (qrexec): service endpoint is `<subcommand>+<hex-encoded-args>`. The RPC handler lives at `/etc/qubes/rpc/pycharm-importer` on the server VM.
+
+When server and client are on the same machine (client's `config.json` says `target_vm: null`), then
+client spawns server as subprocess and passes subcommand + command line argument directly, albeit encoding
+argument as hex before invocation.
+
+When server is on another VM, qrexec communication is used, and the service call endpoint becomes
+the subcommand joined with a plus sign to the hex-encoded argument (if needed by the call).
+
+Client has the ability to send stdin to server, and server can respond via stdout.
+
+## Key files (do not change without checking spec)
+
+- `RECEIPT_CONVERSION_PROMPT.md` — tested LLM prompt for receipt→Beancount conversion. Do not modify without verifying against docs/specs.
+- `pycash_server/pdf.py` — handles multi-page PDF → PNG for receipt ingestion.
+
+## Gotchas
+
+- Config is a singleton per process: calling `Configuration.load()` a second time returns the first result silently. If testing different configs, use separate processes or `--config`.
+- Server emits JSONL with no buffering delay (flushes every 10 chunks). Over qrexec this can be slow; client handles line-by-line reading.
+- The server CLI accepts `-d` for receipts directory override only for the `List` subcommand when running directly.
