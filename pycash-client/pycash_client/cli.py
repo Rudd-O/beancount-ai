@@ -7,21 +7,34 @@ Subcommands (mirror those of pycash-server):
 Config is read from ~/.config/pycash.json.
 """
 
+import difflib
 import argparse
 import json
 import os
 import subprocess
 import sys
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
-from typing import ClassVar, IO
+from typing import ClassVar, IO, Literal, cast
+import pprint
+
+from pycash_client.beancount_loader import load_transaction_contexts, MatchResults
 
 
 CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
 
 
 # -- configuration ---------------------------------------------------------
+
+
+def demarkdownify(llm_output: str) -> str:
+    llm_output_lines = llm_output.splitlines(True)
+    if llm_output_lines[0].startswith("```"):
+        llm_output_lines = llm_output_lines[1:]
+    if llm_output_lines[-1].startswith("```"):
+        llm_output_lines = llm_output_lines[:-1]
+    return "".join(llm_output_lines)
 
 
 class Configuration:
@@ -113,6 +126,33 @@ def shorten_fn(folder: str | Path, fn: str):
 # determines *which* program on the target VM is invoked (registered via dom0 policy).
 
 
+def stream_reasoning_and_capture_output(stdout: IO[bytes]) -> str:
+    accumulated: list[str] = []
+
+    reasoning_over = False
+    for line in stdout:
+        msg = json.loads(line)
+
+        if err := msg.get("error"):
+            print(err, file=sys.stderr)
+            break
+        elif msg.get("finish"):
+            break
+        elif msg.get("reasoning"):
+            sys.stderr.write(msg["reasoning"])
+            sys.stderr.flush()
+        elif msg.get("output"):
+            if not reasoning_over:
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+                reasoning_over = True
+            accumulated.append(msg["output"])
+        else:
+            assert 0, msg
+
+    return "".join(accumulated).strip()
+
+
 class RemoteVM:
     def __init__(self, target_vm: str | None):
         self.target_vm = target_vm
@@ -148,14 +188,19 @@ class RemoteVM:
         assert proc.stdout is not None
         return cmd, proc, proc.stdin, proc.stdout
 
-    def list_receipts(self) -> list[str]:
+    def list_receipts(
+        self, category: Literal["unassociated"] | Literal["uningested"]
+    ) -> list[str]:
         """Return receipt filenames from the server.
 
         Raises on qrexec transport error; prints to stderr and returns ``[]``
         when the JSON cannot be decoded.
         """
 
-        cmd, proc, stdin, stdout = self._call("pycash.List")
+        cmd, proc, stdin, stdout = self._call(
+            "pycash.List"
+            + ("Uningested" if category == "uningested" else "Unassociated")
+        )
         stdin.close()
 
         read_data = stdout.read()
@@ -172,6 +217,19 @@ class RemoteVM:
             print(f"cannot decode server response: {e}", file=sys.stderr)
             return []
 
+    def help_associate_receipt(
+        self, filename: str
+    ) -> tuple[list[str], subprocess.Popen[bytes], IO[bytes], IO[bytes]]:
+        """
+        Calls upon the LLM on the server side to produce a Beancount transaction
+        and the main payment account.
+        """
+        cmd, proc, stdin, stdout = self._call(
+            "pycash.HelpAssociateReceipt", arg=filename
+        )
+        # FIXME caller of this rawdogs it, but the comms logic should be encapsulated in a class later.
+        return cmd, proc, stdin, stdout
+
     def process_receipt(self, filename: str) -> tuple[str, str]:
         """
         Calls upon the LLM on the server side to produce a Beancount transaction
@@ -180,43 +238,15 @@ class RemoteVM:
         cmd, proc, stdin, stdout = self._call("pycash.Process", arg=filename)
         stdin.close()
 
-        accumulated: list[str] = []
-
-        reasoning_over = False
-        for line in stdout:
-            msg = json.loads(line)
-
-            if err := msg.get("error"):
-                print(err, file=sys.stderr)
-                break
-            elif msg.get("finish"):
-                break
-            elif msg.get("reasoning"):
-                sys.stderr.write(msg["reasoning"])
-                sys.stderr.flush()
-            elif msg.get("output"):
-                if not reasoning_over:
-                    sys.stderr.write("\n")
-                    sys.stderr.flush()
-                    reasoning_over = True
-                accumulated.append(msg["output"])
-            else:
-                assert 0, msg
-
+        llm_output = stream_reasoning_and_capture_output(stdout)
         ret = proc.wait()
         if ret != 0:
             raise subprocess.CalledProcessError(ret, cmd)
 
-        llm_output = "".join(accumulated).strip()
         llm_output_original = llm_output
 
         # Remove Markdown quote formatting from JSON output.
-        llm_output_lines = llm_output.splitlines(True)
-        if llm_output_lines[0].startswith("```"):
-            llm_output_lines = llm_output_lines[1:]
-        if llm_output_lines[-1].startswith("```"):
-            llm_output_lines = llm_output_lines[:-1]
-        llm_output = "".join(llm_output_lines)
+        llm_output = demarkdownify(llm_output)
 
         # Fish out first account in the payment accounts list.
         try:
@@ -328,6 +358,50 @@ def insert_document_metadata(transaction_text: str, file_path: str) -> str:
     indent = lines[1][: len(lines[1]) - len(stripped)]
     lines.insert(1, '{}document: "{}"\n'.format(indent, file_path.replace('"', '\\"')))
     return "".join(lines)
+
+
+def _update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) -> str:
+    """Replace or insert document: metadata after the date line.
+
+    If an existing ``document:`` tag is found, preserve its value under ``import_source:``.
+
+    Parameters
+    ----------
+    line_no : int
+        The 1-based line number of the date/payee line (metadata should be inserted after this).
+    """
+    import re
+
+    # The metadata lines start at index `line_no` in 0-indexed tx_lines.
+    metadata_start = line_no  # 0-indexed, right after the date line
+
+    existing_doc = None
+    edit_idx = metadata_start
+
+    # Look for existing document: tag in the next 20 lines.
+    for candidate_idx in range(metadata_start, min(metadata_start + 20, len(tx_lines))):
+        m = re.match(r'^(\s*)document:\s*"([^"]+)"', tx_lines[candidate_idx])
+        if m:
+            existing_doc = m.group(2)
+            edit_idx = candidate_idx
+            break
+
+    indent_match = re.match(r"^(\s*)", tx_lines[edit_idx])
+    indent = indent_match.group(1) if indent_match else "  "
+
+    result = list(tx_lines)
+    new_entry = f'{indent}document: "{new_doc}"\n'
+
+    if existing_doc is not None:
+        # Preserve old value under import_source: and insert both after the document line.
+        source_entry = f'{indent}import_source: "{existing_doc}"\n'
+        result.insert(edit_idx + 1, new_entry)
+        result.insert(edit_idx + 2, source_entry)
+    else:
+        # Insert right before where metadata starts (after date line).
+        result.insert(metadata_start, new_entry)
+
+    return "".join(result)
 
 
 def _preview_receipt(cfg: Configuration, filename: str, preview_dir: Path) -> None:
@@ -446,13 +520,23 @@ class ImportResult:
             raise eee
 
 
-def do_list(cfg: Configuration, args: argparse.Namespace) -> None:
+def do_list_uningested(cfg: Configuration, args: argparse.Namespace) -> None:
     """
-    Lists receipt files from the server.
+    Lists uningested receipt files from the server.
 
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
-    for fname in RemoteVM.from_cfg(cfg).list_receipts():
+    for fname in RemoteVM.from_cfg(cfg).list_receipts("uningested"):
+        print(fname)
+
+
+def do_list_unassociated(cfg: Configuration, args: argparse.Namespace) -> None:
+    """
+    Lists receipt files yet to be associated to transactions from the server.
+
+    Exits on success, and if errors are encountered, exits with a non-zero error code.
+    """
+    for fname in RemoteVM.from_cfg(cfg).list_receipts("unassociated"):
         print(fname)
 
 
@@ -518,7 +602,7 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
     batch_mode: bool = args.batch
 
     vm = RemoteVM.from_cfg(cfg)
-    receipts = vm.list_receipts()
+    receipts = vm.list_receipts("uningested")
     if not receipts:
         print("No receipts to ingest.", file=sys.stderr)
         return
@@ -624,6 +708,277 @@ def do_organize(cfg: Configuration, args: argparse.Namespace) -> None:
     print("The file has been organized into", str(receipt_path), file=sys.stderr)
 
 
+def find_transaction_in_file(file_path: Path, transaction_text: str) -> int | None:
+    """Find the line number of *transaction_text* in *file_path*.
+
+    Returns the 1-based line number where the transaction starts, or ``None``.
+    """
+    content = file_path.read_text(encoding="utf-8")
+    lines = content.splitlines(True)
+    target_lines = [ln for ln in transaction_text.splitlines(True) if ln.strip()]
+    if not target_lines:
+        return None
+
+    first_line_stripped = target_lines[0].strip()
+    for i, line in enumerate(lines):
+        if i + len(target_lines) > len(lines):
+            break
+        if lines[i].strip() == first_line_stripped:
+            # Verify the rest of the transaction matches.
+            match = True
+            for j, target_line in enumerate(target_lines[1:]):
+                stripped_target = target_line.strip()
+                if not stripped_target:
+                    continue
+                if i + 1 + j >= len(lines):
+                    match = False
+                    break
+                if lines[i + 1 + j].strip() != stripped_target:
+                    match = False
+                    break
+            if match:
+                return i + 1  # 1-based
+    return None
+
+
+def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
+    """Associate a receipt with an existing Beancount transaction.
+
+    Flow:
+      1. Process the receipt → get date + amount from LLM.
+      2. Query Beancount for candidates within -1/+45 days.
+      3. Send candidates to pycash.MatchCandidates on server.
+      4. If unambiguous, auto-select + update document metadata.
+      5. If ambiguous, present ranked list to user.
+      6. Organize the receipt file.
+    """
+    vm = RemoteVM.from_cfg(cfg)
+
+    # Step 1: Process the receipt via LLM (existing flow).
+    try:
+        cmd, proc, stdin, stdout = vm.help_associate_receipt(args.filename)
+    except subprocess.CalledProcessError as e:
+        print(f"Error processing receipt: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    llm_output = demarkdownify(stream_reasoning_and_capture_output(stdout))
+    receipt_info = json.loads(llm_output)
+    try:
+        receipt_date = date.strptime(receipt_info["date"], "%Y-%m-%d")  # type:ignore
+    except KeyError:
+        receipt_date = None
+    amt_str, cur = receipt_info["amount"].split(" ")
+
+    if receipt_date:
+        print(f"Receipt date: {receipt_date.isoformat()}", file=sys.stderr)
+    else:
+        print("No date in receipt", file=sys.stderr)
+    print(f"Receipt amount: {amt_str} {cur}", file=sys.stderr)
+
+    # Step 2: Get candidates from Beancount.
+    main_file = cfg.beancount_folder / cfg.beancount_main_file
+    if receipt_date:
+        start_date = receipt_date - timedelta(days=1)
+        end_date = receipt_date + timedelta(
+            days=45
+        )  # 45 days ought to be good for receipts paid up to a month later
+
+        try:
+            _, contexts = load_transaction_contexts(str(main_file), start_date, end_date)
+        except Exception as e:
+            print(f"Error loading candidates from Beancount: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # FIXME PLEASE
+
+    print(f"Found {len(contexts)} candidate transactions.", file=sys.stderr)
+
+    candidates_data = [
+        ctx.__dict__ if hasattr(ctx, "__dict__") else ctx for ctx in contexts
+    ]
+    # Write candidates JSON to the server.
+    candidates_raw = json.dumps(candidates_data).encode("utf-8")
+    stdin.write(candidates_raw)
+    stdin.flush()
+    stdin.close()
+
+    llm_output = demarkdownify(stream_reasoning_and_capture_output(stdout))
+    stdout.close()
+
+    ret = proc.wait()
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
+
+    try:
+        resp = cast(MatchResults, json.loads(llm_output))
+    except Exception as e:
+        print(f"could not decode LLM output to JSON: {e}", file=sys.stderr)
+        print(f"LLM output:\n{llm_output}", file=sys.stderr)
+        sys.exit(1)
+
+    matches = resp.get("matches", [])
+    if not matches:
+        print("No valid matches found.", file=sys.stderr)
+        return
+
+    # Step 4 & 5: Interpret results.
+    is_ambiguous = resp.get("ambiguous", False) or (
+        len(matches) > 0 and matches[0].get("score", 0) < 0.8
+    )
+
+    if is_ambiguous:
+        print(
+            "sorry, matches are ambiguous, cannot proceed; list of matches:",
+            file=sys.stderr,
+        )
+        return
+
+        # Present ranked list to user.
+        print("\nRanked candidates (select by index):", file=sys.stderr)
+        for candidate_match in matches[:5]:  # show top 5
+            print("candidate:", file=sys.stderr)
+            print(pprint.pformat(candidate_match), file=sys.stderr)
+        #     idx = candidate_match["index"]
+        #     score = candidate_match.get("score", 0)
+        #     ctx = contexts[idx]
+
+        #     amount_str = (
+        #         f"{ctx['paid_amount']} {ctx['paid_currency']}"
+        #         if ctx.get("paid_amount")
+        #         else "N/A"
+        #     )
+        #     payee = ctx.get("payee") or "N/A"
+        #     narration = (ctx.get("narration") or "N/A").ljust(30)
+
+        #     print(
+        #         f"  [{idx}] score={score:.2f} {ctx['date_str']}  {str(payee).ljust(25)}  {narration}{amount_str:>15}",
+        #         file=sys.stderr,
+        #     )
+
+        # while True:
+        #     try:
+        #         choice = input("\nSelect candidate (index, or 'r' to retry): ")
+        #         if choice.strip().lower() == "r":
+        #             print(
+        #                 "Retrying...", file=sys.stderr
+        #             )  # TODO: actually reload and re-match
+        #             pass  # stay in loop
+
+        #         selected_idx = int(choice.strip())
+        #         if 0 <= selected_idx < len(contexts):
+        #             is_ambiguous = False
+        #             break
+        #         else:
+        #             print(
+        #                 f"Invalid index. Use [0-{len(contexts) - 1}].", file=sys.stderr
+        #             )
+        #     except (ValueError, EOFError):
+        #         print("Please enter a valid number.", file=sys.stderr)
+        return
+
+    selected_match_index = 0
+    selected_match = matches[selected_match_index]
+
+    selected_txes = [
+        tx
+        for tx in contexts
+        if tx.line_no == selected_match["line_no"]
+        and tx.source_file == selected_match["source_file"]
+    ]
+
+    if len(selected_txes) > 1:
+        print(
+            f"Multiple transactions fit selected transaction match produced by LLM: {selected_match}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    elif not selected_txes:
+        print(
+            f"No transactions fit selected transaction match produced by LLM: {selected_match}",
+            file=sys.stderr,
+        )
+
+    selected_tx = selected_txes[0]
+
+    # Step 6: Download + organize receipt.
+    receipt_path = predict_receipt_destination_path(
+        cfg.beancount_folder, receipt_date, args.filename, selected_tx.crediting_account
+    )
+
+    # Step 7: Update document metadata.
+    tx_file = Path(selected_tx.source_file)
+    line_no = selected_tx.line_no
+
+    if not tx_file.exists():
+        print(
+            f"Warning: Transaction source file '{tx_file}' does not exist. Cannot update metadata.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Read the transaction text and update it.
+    all_lines = tx_file.read_text(encoding="utf-8").splitlines(True)
+
+    if line_no > len(all_lines):
+        print(
+            f"Error: line number {line_no} exceeds file length ({len(all_lines)}).",
+            file=sys.stderr,
+        )
+        return
+
+    new_content = _update_document_metadata(
+        line_no,
+        all_lines,
+        str(receipt_path),
+    )
+
+    old_lines = all_lines
+    new_lines_txt = (
+        new_content.rstrip("\n") + "\n"
+        if not new_content.endswith("\n")
+        else new_content
+    )
+    new_lines = new_lines_txt.splitlines(True)
+
+    diff = list(
+        difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile=str(tx_file),
+            tofile=str(tx_file),
+        )
+    )
+    if diff:
+        print("--- Changes ---", file=sys.stdout)
+        for line in diff:
+            sys.stdout.write(line)
+
+    if args.no:
+        print(f"Skipping changes to {tx_file} (--no requested)", file=sys.stderr)
+        return
+
+    if args.yes:
+        print(f"\nSave changes to '{tx_file}'? [y/n] ", file=sys.stderr, end="")
+        try:
+            answer = input().strip().lower()
+        except EOFError:
+            return
+
+        if answer != "y":
+            return
+
+    # Download the receipt and save it organized.
+    raw_bytes = vm.fetch_receipt(args.filename)
+    receipt_path.write_bytes(raw_bytes)
+
+    print(f"Receipt saved to {receipt_path}", file=sys.stderr)
+
+    tx_file.write_text(new_content, encoding="utf-8")
+    print(f"Updated document metadata on line {line_no} of {tx_file}", file=sys.stderr)
+
+    vm.remove_receipt(args.filename)
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="pycash-client",
@@ -638,7 +993,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp = ap.add_subparsers(dest="command")
 
-    sp.add_parser("list", help="Get receipt filenames to import (plain text)")
+    sp.add_parser(
+        "list-unassociated",
+        help="Get receipt filenames to associate with transactions (plain text)",
+    )
+    sp.add_parser(
+        "list-uningested",
+        help="Get receipt filenames to import as transactions (plain text)",
+    )
 
     process_cmd = sp.add_parser(
         "process", help="Process a receipt image via Open-WebUI"
@@ -658,7 +1020,8 @@ def build_parser() -> argparse.ArgumentParser:
     org_cmd.add_argument("account", help="Payment account (e.g. Assets:Cash:CHF)")
 
     imp_cmd = sp.add_parser(
-        "import", help="Full import pipeline: LLM → organize → append to Beancount"
+        "import",
+        help="Partial ingest pipeline: LLM → organize → append to Beancount, but receipt in server is left alone",
     )
     imp_cmd.add_argument("filename", help="Filename of the receipt")
 
@@ -673,6 +1036,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         dest="batch",
         help="Non-interactive batch mode: import what it can, skip the rest",
+    )
+
+    assoc_cmd = sp.add_parser(
+        "associate", help="Associate a receipt with an existing Beancount transaction"
+    )
+    assoc_cmd.add_argument("filename", help="Filename of the receipt")
+    yes_group = assoc_cmd.add_mutually_exclusive_group()
+    yes_group.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        default=False,
+        dest="yes",
+        help="Confirm all actions automatically (equivalent to answering 'yes' to every prompt)",
+    )
+    yes_group.add_argument(
+        "--no",
+        "-n",
+        action="store_true",
+        default=False,
+        dest="no",
+        help="Deny all actions automatically (equivalent to answering 'no' to every prompt)",
     )
 
     return ap
@@ -690,13 +1075,15 @@ def main() -> None:
         sys.exit(1)
 
     dispatch = {
-        "list": do_list,
+        "list-unassociated": do_list_unassociated,
+        "list-uningested": do_list_uningested,
         "fetch": do_fetch,
         "import": do_import,
         "ingest": do_ingest,
         "organize": do_organize,
         "process": do_process,
         "remove": do_remove,
+        "associate": do_associate,
     }
     dispatch[args.command](cfg, args)
 

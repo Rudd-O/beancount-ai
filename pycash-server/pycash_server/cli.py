@@ -9,19 +9,30 @@ As a qrexec service, it reads nothing from stdin and only writes structured resu
 """
 
 import argparse
+import base64
 import datetime
 import json
 import os
 import sys
 from pathlib import Path
-from typing import ClassVar, TypedDict, cast
-from webdav4.client import Client  # type:ignore
+from typing import ClassVar, TypedDict, cast, Literal
+from webdav4.client import Client, ResourceNotFound  # type:ignore
 
+from openai._streaming import Stream
+from openai.types.chat import (
+    ChatCompletionContentPartImageParam,
+    ChatCompletionChunk,
+    ChatCompletionContentPartTextParam,
+    ChatCompletionMessageParam,
+)
 from .pdf import render_pdf_pages_to_png
 
 CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
-PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
-
+RECEIPT_CONVERSION_PROMPT_PATH = (
+    Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
+)
+RECEIPT_MATCH_PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_MATCH_PROMPT.md"
+RECEIPT_INFO_PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_INFO_PROMPT.md"
 
 # -- configuration ---------------------------------------------------------
 
@@ -52,6 +63,7 @@ class Configuration:
     receipts_username: str
     receipts_password: str
     receipts_ingestion_url: str
+    receipts_association_url: str
 
     def __init__(self) -> None:
         raise NotImplementedError("Use Configuration.load() to obtain an instance")
@@ -94,116 +106,17 @@ class Configuration:
         instance.receipts_username = data["receipts_username"]
         instance.receipts_password = data["receipts_password"]
         instance.receipts_ingestion_url = data["receipts_ingestion_url"]
+        instance.receipts_association_url = data["receipts_association_url"]
         cls.instance = instance
         return cls.instance
 
 
-# -- subcommands -----------------------------------------------------------
-
-_EXT = frozenset((".jpg", ".jpeg", ".png", ".pdf"))
-
-
-def do_list(cfg: Configuration, args: argparse.Namespace) -> None:
-    url = cfg.receipts_ingestion_url
-    username = cfg.receipts_username
-    password = cfg.receipts_password
-
-    client = Client(url, auth=(username, password))
-
-    class ItemListing(TypedDict):
-        name: str
-        content_length: int | None
-        modified: datetime.datetime
-
-    try:
-        items = cast(list[ItemListing], client.ls("/", detail=True))
-    except Exception as e:
-        print(f"error: WebDAV list failed: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    files: list[ItemListing] = []
-    for item in items:
-        name = item["name"]
-        if not any(name.lower().endswith(ext) for ext in _EXT):
-            continue
-        files.append(
-            {
-                "name": name,
-                "content_length": item["content_length"],
-                "modified": item["modified"],
-            }
-        )
-
-    files.sort(key=lambda f: f["modified"])
-
-    print(
-        json.dumps(
-            {
-                "receipts": [f["name"] for f in files],
-                "count": len(files),
-            }
-        )
-    )
-
-
-def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
-    import base64
-    import ssl
-
-    from openai._streaming import Stream
-
-    from openai.types.chat import (
-        ChatCompletionContentPartImageParam,
-        ChatCompletionChunk,
-        ChatCompletionContentPartTextParam,
-        ChatCompletionMessageParam,
-    )
-    from httpx import Client as HttpxClient
-    from openwebui_client import OpenWebUIClient
-
-    url = cfg.receipts_ingestion_url
-    username = cfg.receipts_username
-    password = cfg.receipts_password
-
-    argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
-    fn = os.path.basename(argsfilename)
-    webdav_client = Client(url, auth=(username, password))
-
-    receipt_path = f"/{fn}"
-
-    print(f"Reading {fn} from WebDAV receipts URL", file=sys.stderr)
-
-    prompt_text = PROMPT_PATH.read_text()
-
-    try:
-        with webdav_client.open(receipt_path, "rb") as remote_file:
-            raw: bytes = remote_file.read()  # type: ignore
-    except Exception as e:
-        print(f"error: cannot read {fn}: {e}", file=sys.stderr)
-        sys.exit(1)
+def file_to_image_parts(
+    fn: str, raw: bytes
+) -> list["ChatCompletionContentPartImageParam"]:
+    image_parts: list["ChatCompletionContentPartImageParam"] = []
 
     suffix = Path(fn).suffix.lower()
-
-    ssl_paths = ssl.get_default_verify_paths()
-    if ssl_paths.cafile:
-        verify = ssl_paths.cafile
-    else:
-        import certifi
-
-        verify = certifi.where()
-
-    client = OpenWebUIClient(
-        api_key=cfg.openwebui_token,
-        base_url=cfg.openwebui_url,
-        http_client=HttpxClient(verify=verify),
-    )
-
-    text_part: ChatCompletionContentPartTextParam = {
-        "type": "text",
-        "text": prompt_text,
-    }
-
-    image_parts: list[ChatCompletionContentPartImageParam] = []
 
     if suffix == ".pdf":
         print("PDF detected; converting pages to PNG...", file=sys.stderr)
@@ -247,22 +160,80 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
             }
         )
 
-    messages: list[ChatCompletionMessageParam] = [
-        {"role": "user", "content": [text_part, *image_parts]}
-    ]
+    return image_parts
 
-    resp = client.chat.completions.create(
-        model=cfg.openwebui_model,
-        messages=messages,
-        stream=True,
+
+# -- subcommands -----------------------------------------------------------
+
+_EXT = frozenset((".jpg", ".jpeg", ".png", ".pdf"))
+
+
+def do_list(
+    cfg: Configuration,
+    category: Literal["unassociated"] | Literal["uningested"],
+    args: argparse.Namespace,
+) -> None:
+    url = (
+        cfg.receipts_ingestion_url
+        if category == "uningested"
+        else cfg.receipts_association_url
+    )
+    username = cfg.receipts_username
+    password = cfg.receipts_password
+
+    client = Client(url, auth=(username, password))
+
+    class ItemListing(TypedDict):
+        name: str
+        content_length: int | None
+        modified: datetime.datetime
+
+    try:
+        items = cast(list[ItemListing], client.ls("/", detail=True))
+    except Exception as e:
+        print(f"error: WebDAV list failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    files: list[ItemListing] = []
+    for item in items:
+        name = item["name"]
+        if not any(name.lower().endswith(ext) for ext in _EXT):
+            continue
+        files.append(
+            {
+                "name": name,
+                "content_length": item["content_length"],
+                "modified": item["modified"],
+            }
+        )
+
+    files.sort(key=lambda f: f["modified"])
+
+    print(
+        json.dumps(
+            {
+                "receipts": [f["name"] for f in files],
+                "count": len(files),
+            }
+        )
     )
 
-    flush_every = 0
+
+def do_list_unassociated(cfg: Configuration, args: argparse.Namespace) -> None:
+    do_list(cfg, "unassociated", args)
+
+
+def do_list_uningested(cfg: Configuration, args: argparse.Namespace) -> None:
+    do_list(cfg, "uningested", args)
+
+
+def stream_reasoning_and_output(resp: Stream[ChatCompletionChunk]):
+    flush_every = 10
     # This will emit one of three types of lines:
     # {"reasoning": "reasoning text chunk"}
     # {"output": "output text chunk"}
     # {"finish":" finish reason"} (usually "stop")
-    for chunk in cast(Stream[ChatCompletionChunk], resp):
+    for chunk in resp:
         choice = chunk.choices[0]
         delta = choice.delta
         if hasattr(delta, "reasoning_content") and delta.reasoning_content is not None:  # type:ignore
@@ -277,22 +248,91 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
         flush_every += 1
         if flush_every % 10 == 0:
             sys.stdout.flush()
+    sys.stdout.flush()
 
 
-def do_fetch(cfg: Configuration, args: argparse.Namespace) -> None:
+def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
+    import ssl
+    from httpx import Client as HttpxClient
+    from openwebui_client import OpenWebUIClient
+
     url = cfg.receipts_ingestion_url
     username = cfg.receipts_username
     password = cfg.receipts_password
 
-    fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
+    argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
+    fn = os.path.basename(argsfilename)
     webdav_client = Client(url, auth=(username, password))
+
     receipt_path = f"/{fn}"
 
-    print(f"Fetching {fn} from WebDAV receipts URL", file=sys.stderr)
+    print(f"Reading {fn} from WebDAV receipts URL", file=sys.stderr)
+
+    prompt_text = RECEIPT_CONVERSION_PROMPT_PATH.read_text()
 
     try:
         with webdav_client.open(receipt_path, "rb") as remote_file:
             raw: bytes = remote_file.read()  # type: ignore
+    except Exception as e:
+        print(f"error: cannot read {fn}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    ssl_paths = ssl.get_default_verify_paths()
+    if ssl_paths.cafile:
+        verify = ssl_paths.cafile
+    else:
+        import certifi
+
+        verify = certifi.where()
+
+    client = OpenWebUIClient(
+        api_key=cfg.openwebui_token,
+        base_url=cfg.openwebui_url,
+        http_client=HttpxClient(verify=verify),
+    )
+
+    text_part: ChatCompletionContentPartTextParam = {
+        "type": "text",
+        "text": prompt_text,
+    }
+
+    image_parts = file_to_image_parts(fn, raw)
+
+    messages: list[ChatCompletionMessageParam] = [
+        {"role": "user", "content": [text_part, *image_parts]}
+    ]
+
+    resp = client.chat.completions.create(
+        model=cfg.openwebui_model,
+        messages=messages,
+        stream=True,
+    )
+
+    stream_reasoning_and_output(cast(Stream[ChatCompletionChunk], resp))
+
+
+def do_fetch(cfg: Configuration, args: argparse.Namespace) -> None:
+    urls = [cfg.receipts_ingestion_url, cfg.receipts_association_url]
+    username = cfg.receipts_username
+    password = cfg.receipts_password
+
+    fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
+
+    print(f"Fetching {fn} from WebDAV receipts URL", file=sys.stderr)
+    receipt_path = f"/{fn}"
+
+    try:
+        webdav_client = Client(urls[0], auth=(username, password))
+        with webdav_client.open(receipt_path, "rb") as remote_file:
+            raw: bytes = remote_file.read()  # type: ignore
+    except ResourceNotFound:
+        try:
+            webdav_client = Client(urls[1], auth=(username, password))
+            with webdav_client.open(receipt_path, "rb") as remote_file:
+                raw: bytes = remote_file.read()  # type: ignore
+        except Exception as e:
+            print(f"error: cannot read {fn}: {e}", file=sys.stderr)
+            sys.exit(1)
     except Exception as e:
         print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)
@@ -302,21 +342,130 @@ def do_fetch(cfg: Configuration, args: argparse.Namespace) -> None:
 
 
 def do_remove(cfg: Configuration, args: argparse.Namespace) -> None:
-    url = cfg.receipts_ingestion_url
+    urls = [cfg.receipts_ingestion_url, cfg.receipts_association_url]
     username = cfg.receipts_username
     password = cfg.receipts_password
 
     fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
-    webdav_client = Client(url, auth=(username, password))
     receipt_path = f"/{fn}"
 
     print(f"Removing {fn} from WebDAV receipts URL", file=sys.stderr)
 
     try:
+        webdav_client = Client(urls[0], auth=(username, password))
         webdav_client.remove(receipt_path)
+    except ResourceNotFound:
+        try:
+            webdav_client = Client(urls[1], auth=(username, password))
+            webdav_client.remove(receipt_path)
+        except Exception as e:
+            print(f"error: cannot remove {fn}: {e}", file=sys.stderr)
+            sys.exit(1)
     except Exception as e:
         print(f"error: cannot remove {fn}: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> None:
+    """Process a receipt against a list of candidate transactions (passed via stdin).
+
+    Reads candidates JSON from stdin; the filename arg comes via hex-encoded CLI.
+    The function loads the receipt image from WebDAV, feeds it to Open-WebUI together
+    with candidate text, and writes structured match results to stdout as plain JSON.
+    """
+    import ssl
+
+    from httpx import Client as HttpxClient
+    from openwebui_client import OpenWebUIClient
+
+    url = cfg.receipts_association_url
+    username = cfg.receipts_username
+    password = cfg.receipts_password
+
+    argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
+    fn = os.path.basename(argsfilename)
+    webdav_client = Client(url, auth=(username, password))
+
+    receipt_path = f"/{fn}"
+
+    print(f"Reading {fn} from WebDAV receipts URL", file=sys.stderr)
+
+    try:
+        with webdav_client.open(receipt_path, "rb") as remote_file:
+            raw: bytes = remote_file.read()  # type: ignore
+    except Exception as e:
+        print(json.dumps({"error": f"cannot read {fn}: {e}"}))
+        sys.exit(1)
+
+    # FIXME this is duplicated code, refactor.
+    ssl_paths = ssl.get_default_verify_paths()
+    if ssl_paths.cafile:
+        verify = ssl_paths.cafile
+    else:
+        import certifi
+
+        verify = certifi.where()
+
+    client = OpenWebUIClient(
+        api_key=cfg.openwebui_token,
+        base_url=cfg.openwebui_url,
+        http_client=HttpxClient(verify=verify),
+    )
+
+    # Build the image part(s); reuse PDF → PNG logic from do_process.
+    image_parts: list[ChatCompletionContentPartImageParam] = file_to_image_parts(
+        fn, raw
+    )
+
+    prompt_text = RECEIPT_INFO_PROMPT_PATH.read_text()
+
+    text_part: ChatCompletionContentPartTextParam = {
+        "type": "text",
+        "text": prompt_text,
+    }
+
+    messages: list[ChatCompletionMessageParam] = [
+        {"role": "user", "content": [text_part, *image_parts]}
+    ]
+
+    resp = client.chat.completions.create(
+        model=cfg.openwebui_model,
+        messages=messages,
+        stream=True,
+    )
+
+    stream_reasoning_and_output(cast(Stream[ChatCompletionChunk], resp))
+
+    # Read candidates from stdin.
+    try:
+        candidates_raw = sys.stdin.read()
+        # prevent LLM injection.
+        candidates = json.loads(candidates_raw)
+        candidates_text = json.dumps(candidates)
+    except Exception as e:
+        print(json.dumps({"error": f"invalid candidate input: {e}"}))
+        sys.exit(1)
+
+    prompt_text = RECEIPT_MATCH_PROMPT_PATH.read_text().format(
+        candidates_json=candidates_text
+    )
+
+    text_part: ChatCompletionContentPartTextParam = {
+        "type": "text",
+        "text": prompt_text,
+    }
+
+    messages: list[ChatCompletionMessageParam] = [
+        {"role": "user", "content": [text_part, *image_parts]}
+    ]
+
+    resp = client.chat.completions.create(
+        model=cfg.openwebui_model,
+        messages=messages,
+        stream=True,
+    )
+
+    stream_reasoning_and_output(cast(Stream[ChatCompletionChunk], resp))
 
 
 # -- CLI -------------------------------------------------------------------
@@ -337,7 +486,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = ap.add_subparsers(dest="command")
 
-    sp.add_parser("pycash.List", help="List receipt filenames to import (JSON)")
+    sp.add_parser(
+        "pycash.ListUningested",
+        help="List receipt filenames to import as transactions (JSON)",
+    )
+    sp.add_parser(
+        "pycash.ListUnassociated",
+        help="List receipt filenames to associate with transactions (JSON)",
+    )
 
     fetch_cmd = sp.add_parser(
         "pycash.Fetch", help="Write the raw contents of a receipt file to stdout"
@@ -363,6 +519,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filename of the receipt (encoded as hex)",
     )
 
+    match_cmd = sp.add_parser(
+        "pycash.HelpAssociateReceipt",
+        help="Match a receipt against candidate transactions (candidates via stdin)",
+    )
+    match_cmd.add_argument(
+        "filename",
+        help="Filename of the receipt (encoded as hex)",
+    )
+
     return ap
 
 
@@ -379,9 +544,11 @@ def main() -> None:
     cfg = Configuration.load(args.conf_path)
 
     dispatch = {
-        "pycash.List": do_list,
+        "pycash.ListUningested": do_list_uningested,
+        "pycash.ListUnassociated": do_list_unassociated,
         "pycash.Fetch": do_fetch,
         "pycash.Process": do_process,
+        "pycash.HelpAssociateReceipt": do_help_associate_receipt,
         "pycash.Remove": do_remove,
     }
     handler = dispatch.get(args.command)

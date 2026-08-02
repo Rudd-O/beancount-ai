@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from datetime import date, timedelta
-
+from typing import TypedDict
 from beancount import loader
 
 
@@ -29,7 +29,7 @@ class TransactionInfo:
     narration: str | None
     paid_amount: float | None  # total amount that was paid
     paid_currency: str | None  # e.g. "CHF"
-    crediting_account: str | None  # account debited to pay (source of funds)
+    crediting_account: str
     accounts: set[str]
 
 
@@ -42,10 +42,34 @@ class CandidateContext:
     narration: str | None
     paid_amount: float | None
     paid_currency: str | None
-    crediting_account: str | None
+    crediting_account: str
     source_file: str
     line_no: int
     transaction_text: str  # full Beancount text, for comparison
+
+
+class MatchResult(TypedDict):
+    """
+    Result from LLM attempting to match a receipt to a set of transactions.
+
+    See RECEIPT_MATCH_PROMPT.md for more information.
+    """
+
+    line_no: int
+    source_file: str
+    score: float
+    reason: str
+
+
+class MatchResults(TypedDict):
+    """
+    Results from LLM attempting to match a receipt to a set of transactions.
+
+    See RECEIPT_MATCH_PROMPT.md for more information.
+    """
+
+    ambiguous: bool
+    matches: list[MatchResult]
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +210,8 @@ def load_transactions(
 
 def load_transaction_contexts(
     main_file: str,
-    start_date: date | None = None,
-    end_date: date | None = None,
+    start_date: date,
+    end_date: date,
 ) -> tuple[list[TransactionInfo], list[CandidateContext]]:
     """Load transactions and produce candidate-context data suitable for LLM scoring.
 

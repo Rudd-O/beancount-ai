@@ -50,6 +50,7 @@ Both programs read from the same config file by default `~/.config/pycash.json` 
 | `receipts_username` | `str` | WebDAV username for the receipts data source |
 | `receipts_password` | `str` | WebDAV password for the receipts data source |
 | `receipts_ingestion_url` | `str` | WebDAV URL where receipt files to be ingested are stored |
+| `receipts_association_url` | `str` | WebDAV URL where receipt files to be associated are stored |
 
 ### Client configuration fields
 
