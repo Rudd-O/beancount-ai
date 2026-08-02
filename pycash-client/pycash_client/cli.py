@@ -360,46 +360,51 @@ def insert_document_metadata(transaction_text: str, file_path: str) -> str:
     return "".join(lines)
 
 
-def _update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) -> str:
-    """Replace or insert document: metadata after the date line.
+# Use numbered document keys (document, document2, document3, ...) so each associated
+# receipt gets its own metadata key and the newest one is always just `document:`.
+def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) -> str:
+    """Add or replace a document metadata entry after the date line.
 
-    If an existing ``document:`` tag is found, preserve its value under ``import_source:``.
-
-    Parameters
-    ----------
-    line_no : int
-        The 1-based line number of the date/payee line (metadata should be inserted after this).
+    The newest doc is always ``document:`` (first in the block).  Any existing
+    ``document:`` / ``documentN:`` entries are preserved but renumbered to
+    ``document2:``, ``document3:``, … -- old numbering is ignored.
     """
     import re
 
-    # The metadata lines start at index `line_no` in 0-indexed tx_lines.
-    metadata_start = line_no  # 0-indexed, right after the date line
+    metadata_start = line_no  # first index AFTER the date/payee line
+    assert metadata_start < len(tx_lines)
 
-    existing_doc = None
-    edit_idx = metadata_start
+    # 1. Keep lines before metadata_start unchanged.
+    result: list[str] = [line for line in tx_lines[:metadata_start]]
 
-    # Look for existing document: tag in the next 20 lines.
-    for candidate_idx in range(metadata_start, min(metadata_start + 20, len(tx_lines))):
-        m = re.match(r'^(\s*)document:\s*"([^"]+)"', tx_lines[candidate_idx])
-        if m:
-            existing_doc = m.group(2)
-            edit_idx = candidate_idx
+    # 2. Scan from metadata_start collecting doc entries; stop at empty line or non-doc.
+    pre_indent = (re.match(r"^(\s+)", result[-1]) or re.match(r"^(\s+)", "  "))
+    pre_str = pre_indent.group(1) if pre_indent else "  "
+
+    doc_entries: list[tuple[int, str]] = []  # (original_line_index, path)
+    j = metadata_start
+    while j < len(tx_lines):
+        ln = tx_lines[j]
+        if not ln.strip():         # blank line → stop scanning
             break
+        m = re.match(r"^\s+document(\d+)?:\s*\"?([^\"\n]*)", ln)
+        if not m:                  # non-doc metadata line → stop scanning
+            break
+        doc_entries.append((j, m.group(2)))  # captured path value
+        j += 1
 
-    indent_match = re.match(r"^(\s*)", tx_lines[edit_idx])
-    indent = indent_match.group(1) if indent_match else "  "
+    # 3. Rebuild the metadata block (newest first).
+    new_lines: list[str] = [f'{pre_str}document: "{new_doc}"\n']
+    for pos, (_, path) in enumerate(doc_entries):
+        label = f"document{str(pos + 2)}"       # document2, document3, ...
+        new_lines.append(f'{pre_str}{label}: "{path}"\n')
 
-    result = list(tx_lines)
-    new_entry = f'{indent}document: "{new_doc}"\n'
+    result.extend(new_lines)
 
-    if existing_doc is not None:
-        # Preserve old value under import_source: and insert both after the document line.
-        source_entry = f'{indent}import_source: "{existing_doc}"\n'
-        result.insert(edit_idx + 1, new_entry)
-        result.insert(edit_idx + 2, source_entry)
-    else:
-        # Insert right before where metadata starts (after date line).
-        result.insert(metadata_start, new_entry)
+    # 4. Append remaining lines (everything after the scanned doc block).
+    if j < len(tx_lines):
+        remaining = list(tx_lines[j:])
+        result.extend(remaining)
 
     return "".join(result)
 
