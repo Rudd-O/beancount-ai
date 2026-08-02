@@ -784,12 +784,14 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
         )  # 45 days ought to be good for receipts paid up to a month later
 
         try:
-            _, contexts = load_transaction_contexts(str(main_file), start_date, end_date)
+            _, contexts = load_transaction_contexts(
+                str(main_file), start_date, end_date
+            )
         except Exception as e:
             print(f"Error loading candidates from Beancount: {e}", file=sys.stderr)
             sys.exit(1)
     else:
-        # FIXME PLEASE
+        assert 0, "Date for receipt could not be deduced."
 
     print(f"Found {len(contexts)} candidate transactions.", file=sys.stderr)
 
@@ -926,7 +928,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
         )
         return
 
-    new_content = _update_document_metadata(
+    new_content = update_document_metadata(
         line_no,
         all_lines,
         str(receipt_path),

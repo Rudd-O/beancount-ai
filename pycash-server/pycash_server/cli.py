@@ -417,7 +417,9 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
         fn, raw
     )
 
-    prompt_text = RECEIPT_INFO_PROMPT_PATH.read_text()
+    prompt_text = RECEIPT_INFO_PROMPT_PATH.read_text().format(
+        **{"fn": "`" + fn.replace("`", "\\`") + "`"}
+    )
 
     text_part: ChatCompletionContentPartTextParam = {
         "type": "text",
