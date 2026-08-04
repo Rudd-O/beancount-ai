@@ -967,6 +967,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
             new_lines,
             fromfile=str(tx_file),
             tofile=str(tx_file),
+            n=5,
         )
     )
     if diff:
