@@ -772,13 +772,13 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
         receipt_date = date.strptime(receipt_info["date"], "%Y-%m-%d")  # type:ignore
     except KeyError:
         receipt_date = None
-    amt_str, cur = receipt_info["amount"].split(" ")
+    # amt_str, cur = receipt_info["amount"].split(" ")
 
     if receipt_date:
         print(f"Receipt date: {receipt_date.isoformat()}", file=sys.stderr)
     else:
         print("No date in receipt", file=sys.stderr)
-    print(f"Receipt amount: {amt_str} {cur}", file=sys.stderr)
+    # print(f"Receipt amount: {amt_str} {cur}", file=sys.stderr)
 
     # Step 2: Get candidates from Beancount.
     main_file = cfg.beancount_folder / cfg.beancount_main_file
