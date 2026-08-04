@@ -1046,7 +1046,9 @@ def build_parser() -> argparse.ArgumentParser:
     rm_cmd = sp.add_parser("remove", help="Delete a receipt file")
     rm_cmd.add_argument("filename", help="Filename of the receipt file")
 
-    org_cmd = sp.add_parser("organize", help="File a receipt under a payment account")
+    org_cmd = sp.add_parser(
+        "organize", help="File a copy of a receipt under a payment account"
+    )
     org_cmd.add_argument("filename", help="Filename of the receipt")
     org_cmd.add_argument("date", help="Date to impute to receipt file", type=str)
     org_cmd.add_argument("account", help="Payment account (e.g. Assets:Cash:CHF)")
