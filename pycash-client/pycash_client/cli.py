@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import ClassVar, IO, Literal, cast
 import pprint
 
+from pycash_client.report import append_to_report
 from pycash_client.beancount_loader import load_transaction_contexts, MatchResults
 
 
@@ -960,11 +961,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
         for line in diff:
             sys.stdout.write(line)
 
-    if args.no:
-        print(f"Skipping changes to {tx_file} (--no requested)", file=sys.stderr)
-        return
-
-    if args.yes:
+    if not args.no and not args.yes:
         print(f"\nSave changes to '{tx_file}'? [y/n] ", file=sys.stderr, end="")
         try:
             answer = input().strip().lower()
@@ -973,6 +970,21 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
 
         if answer != "y":
             return
+
+    # Save to report.
+    if args.report:
+        with open(args.report, "a+") as reportf:
+            reportf.seek(0, 0)
+            reporttext = reportf.read()
+            reporttext = append_to_report(reporttext, diff)
+            reportf.seek(0, 0)
+            reportf.truncate(0)
+            reportf.write(reporttext)
+            reportf.flush()
+
+    if args.no:
+        print(f"Skipping changes to {tx_file} (--no requested)", file=sys.stderr)
+        return
 
     # Download the receipt and save it organized.
     raw_bytes = vm.fetch_receipt(args.filename)
@@ -1047,6 +1059,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     assoc_cmd = sp.add_parser(
         "associate", help="Associate a receipt with an existing Beancount transaction"
+    )
+    assoc_cmd.add_argument(
+        "--html-report",
+        "-r",
+        default=None,
+        dest="report",
+        help="Produce (or append to) an HTML report",
     )
     assoc_cmd.add_argument("filename", help="Filename of the receipt")
     yes_group = assoc_cmd.add_mutually_exclusive_group()
