@@ -726,7 +726,7 @@ def find_transaction_in_file(file_path: Path, transaction_text: str) -> int | No
         return None
 
     first_line_stripped = target_lines[0].strip()
-    for i, line in enumerate(lines):
+    for i, _ in enumerate(lines):
         if i + len(target_lines) > len(lines):
             break
         if lines[i].strip() == first_line_stripped:
