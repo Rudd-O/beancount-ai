@@ -908,9 +908,22 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
 
     selected_tx = selected_txes[0]
 
+    # # We won't be generating descriptions for now.
+    # description: str | None = None
+    if selected_tx.narration:
+        description = selected_tx.narration
+    elif selected_tx.payee:
+        description = selected_tx.payee
+    else:
+        description = None
+
     # Step 6: Download + organize receipt.
     receipt_path = predict_receipt_destination_path(
-        cfg.beancount_folder, receipt_date, args.filename, selected_tx.crediting_account
+        cfg.beancount_folder,
+        receipt_date,
+        args.filename,
+        selected_tx.crediting_account,
+        description=description,
     )
 
     # Step 7: Update document metadata.
