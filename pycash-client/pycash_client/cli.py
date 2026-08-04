@@ -379,17 +379,17 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
     result: list[str] = [line for line in tx_lines[:metadata_start]]
 
     # 2. Scan from metadata_start collecting doc entries; stop at empty line or non-doc.
-    pre_indent = (re.match(r"^(\s+)", result[-1]) or re.match(r"^(\s+)", "  "))
+    pre_indent = re.match(r"^(\s+)", result[-1]) or re.match(r"^(\s+)", "  ")
     pre_str = pre_indent.group(1) if pre_indent else "  "
 
     doc_entries: list[tuple[int, str]] = []  # (original_line_index, path)
     j = metadata_start
     while j < len(tx_lines):
         ln = tx_lines[j]
-        if not ln.strip():         # blank line → stop scanning
+        if not ln.strip():  # blank line → stop scanning
             break
         m = re.match(r"^\s+document(\d+)?:\s*\"?([^\"\n]*)", ln)
-        if not m:                  # non-doc metadata line → stop scanning
+        if not m:  # non-doc metadata line → stop scanning
             break
         doc_entries.append((j, m.group(2)))  # captured path value
         j += 1
@@ -397,7 +397,7 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
     # 3. Rebuild the metadata block (newest first).
     new_lines: list[str] = [f'{pre_str}document: "{new_doc}"\n']
     for pos, (_, path) in enumerate(doc_entries):
-        label = f"document{str(pos + 2)}"       # document2, document3, ...
+        label = f"document{str(pos + 2)}"  # document2, document3, ...
         new_lines.append(f'{pre_str}{label}: "{path}"\n')
 
     result.extend(new_lines)
