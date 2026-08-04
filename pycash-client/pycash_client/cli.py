@@ -839,6 +839,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
             "sorry, matches are ambiguous, cannot proceed; list of matches:",
             file=sys.stderr,
         )
+        print(pprint.pformat(matches), file=sys.stderr)
         return
 
         # Present ranked list to user.
