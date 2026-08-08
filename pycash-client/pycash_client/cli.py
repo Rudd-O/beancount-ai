@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import ClassVar, IO, Literal, cast, Any
 import pprint
 
+from colorama import Fore, Style
 from pycash_client.report import append_to_report
 from pycash_client.beancount_loader import load_transaction_contexts, MatchResults
 
@@ -152,7 +153,9 @@ def stream_reasoning_and_capture_output(stdout: IO[bytes]) -> str:
         elif msg.get("finish"):
             break
         elif msg.get("reasoning"):
+            sys.stderr.write(Fore.CYAN)
             sys.stderr.write(msg["reasoning"])
+            sys.stderr.write(Style.RESET_ALL)
             sys.stderr.flush()
         elif msg.get("output"):
             if not reasoning_over:
