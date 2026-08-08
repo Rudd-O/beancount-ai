@@ -82,3 +82,9 @@ def render_pdf_pages_to_png(
 
     doc.close()
     return result
+
+
+if __name__ == "__main__":
+    import sys
+
+    render_pdf_pages_to_png(open(sys.argv[1], "rb").read())
