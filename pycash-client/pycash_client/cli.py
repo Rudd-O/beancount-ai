@@ -918,7 +918,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
 
     # # We won't be generating descriptions for now.
     # description: str | None = None
-    if selected_tx.narration:
+    if selected_tx.narration and selected_tx.narration not in ["EFT payment"]:
         description = selected_tx.narration
     elif selected_tx.payee:
         description = selected_tx.payee
