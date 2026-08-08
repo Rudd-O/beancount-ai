@@ -119,6 +119,18 @@ def shorten_fn(folder: str | Path, fn: str):
     return fn
 
 
+class BadJSON(json.decoder.JSONDecodeError):
+    def __str__(self) -> str:
+        return json.decoder.JSONDecodeError.__str__(self) + "\nText:\n" + (self.doc)
+
+
+def load_json(s: str | bytes) -> Any:
+    try:
+        return json.loads(s)
+    except json.decoder.JSONDecodeError as e:
+        raise BadJSON(e.msg, s if isinstance(s, str) else s.decode("utf-8"), e.pos)
+
+
 # -- qrexec transport ------------------------------------------------------
 
 # From inside a VM, IPC to another VM uses:
@@ -132,7 +144,7 @@ def stream_reasoning_and_capture_output(stdout: IO[bytes]) -> str:
 
     reasoning_over = False
     for line in stdout:
-        msg = json.loads(line)
+        msg = load_json(line)
 
         if err := msg.get("error"):
             print(err, file=sys.stderr)
@@ -209,14 +221,10 @@ class RemoteVM:
         if ret != 0:
             raise subprocess.CalledProcessError(ret, cmd)
 
-        try:
-            data = json.loads(read_data)
-            mm = [os.path.basename(x) for x in data["receipts"]]
-            assert mm == data["receipts"]
-            return data["receipts"]
-        except Exception as e:
-            print(f"cannot decode server response: {e}", file=sys.stderr)
-            return []
+        data = load_json(read_data)
+        mm = [os.path.basename(x) for x in data["receipts"]]
+        assert mm == data["receipts"]
+        return data["receipts"]
 
     def help_associate_receipt(
         self, filename: str
@@ -250,12 +258,7 @@ class RemoteVM:
         llm_output = demarkdownify(llm_output)
 
         # Fish out first account in the payment accounts list.
-        try:
-            data = json.loads(llm_output)
-        except json.decoder.JSONDecodeError as e:
-            raise Exception(
-                f"Failed decoding expected JSON at end of string: {e}\n{llm_output_original}"
-            )
+        data = load_json(llm_output)
 
         try:
             payment_account = data["payment_accounts"][0]
@@ -768,7 +771,9 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
         sys.exit(1)
 
     llm_output = demarkdownify(stream_reasoning_and_capture_output(stdout))
-    receipt_info = json.loads(llm_output)
+
+    receipt_info = load_json(llm_output)
+
     try:
         receipt_date = date.strptime(receipt_info["date"], "%Y-%m-%d")  # type:ignore
     except KeyError:
@@ -817,16 +822,11 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
     if ret != 0:
         raise subprocess.CalledProcessError(ret, cmd)
 
-    try:
-        resp = cast(MatchResults, json.loads(llm_output))
-    except Exception as e:
-        print(f"could not decode LLM output to JSON: {e}", file=sys.stderr)
-        print(f"LLM output:\n{llm_output}", file=sys.stderr)
-        sys.exit(1)
+    resp = cast(MatchResults, load_json(llm_output))
 
     matches = resp.get("matches", [])
     if not matches:
-        print("No valid matches found.", file=sys.stderr)
+        print("No valid matches found for receipt {args.filename}.", file=sys.stderr)
         return
 
     # Step 4 & 5: Interpret results.
