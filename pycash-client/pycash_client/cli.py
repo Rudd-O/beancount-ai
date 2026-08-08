@@ -16,7 +16,7 @@ import sys
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
-from typing import ClassVar, IO, Literal, cast
+from typing import ClassVar, IO, Literal, cast, Any
 import pprint
 
 from pycash_client.report import append_to_report
