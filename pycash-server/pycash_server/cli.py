@@ -366,6 +366,8 @@ def do_remove(cfg: Configuration, args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+# FIXME split this function into two, no need to keep stdin open while
+# the other side does things with the first return.
 def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> None:
     """Process a receipt against a list of candidate transactions (passed via stdin).
 
