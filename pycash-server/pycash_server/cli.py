@@ -236,8 +236,8 @@ def stream_reasoning_and_output(resp: Stream[ChatCompletionChunk]):
     for chunk in resp:
         choice = chunk.choices[0]
         delta = choice.delta
-        if hasattr(delta, "reasoning_content") and delta.reasoning_content is not None:  # type:ignore
-            json.dump({"reasoning": delta.reasoning_content}, sys.stdout)  # type:ignore
+        if hasattr(delta, "reasoning_content") and delta.reasoning_content is not None:  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+            json.dump({"reasoning": delta.reasoning_content}, sys.stdout)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
             sys.stdout.write("\n")
         elif delta.content is not None:
             json.dump({"output": delta.content}, sys.stdout)
@@ -272,7 +272,7 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
 
     try:
         with webdav_client.open(receipt_path, "rb") as remote_file:
-            raw: bytes = remote_file.read()  # type: ignore
+            raw: bytes = cast(bytes, remote_file.read())
     except Exception as e:
         print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)
@@ -324,12 +324,12 @@ def do_fetch(cfg: Configuration, args: argparse.Namespace) -> None:
     try:
         webdav_client = Client(urls[0], auth=(username, password))
         with webdav_client.open(receipt_path, "rb") as remote_file:
-            raw: bytes = remote_file.read()  # type: ignore
+            raw: bytes = cast(bytes, remote_file.read())
     except ResourceNotFound:
         try:
             webdav_client = Client(urls[1], auth=(username, password))
             with webdav_client.open(receipt_path, "rb") as remote_file:
-                raw: bytes = remote_file.read()  # type: ignore
+                raw = cast(bytes, remote_file.read())
         except Exception as e:
             print(f"error: cannot read {fn}: {e}", file=sys.stderr)
             sys.exit(1)
@@ -394,7 +394,7 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
 
     try:
         with webdav_client.open(receipt_path, "rb") as remote_file:
-            raw: bytes = remote_file.read()  # type: ignore
+            raw: bytes = cast(bytes, remote_file.read())
     except Exception as e:
         print(json.dumps({"error": f"cannot read {fn}: {e}"}))
         sys.exit(1)
@@ -454,14 +454,12 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
         candidates_json=candidates_text
     )
 
-    text_part: ChatCompletionContentPartTextParam = {
+    text_part = {
         "type": "text",
         "text": prompt_text,
     }
 
-    messages: list[ChatCompletionMessageParam] = [
-        {"role": "user", "content": [text_part, *image_parts]}
-    ]
+    messages = [{"role": "user", "content": [text_part, *image_parts]}]
 
     resp = client.chat.completions.create(
         model=cfg.openwebui_model,

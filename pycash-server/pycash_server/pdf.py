@@ -1,9 +1,9 @@
 from typing import Sequence, Tuple
 
-import fitz
+import fitz  # type:ignore
 
 # Suppress error printouts to stdout — they mess with the JSON LLM output.
-fitz.TOOLS.mupdf_display_errors(False)  # type:ignore
+fitz.TOOLS.mupdf_display_errors(False)
 
 
 def render_pdf_pages_to_png(
