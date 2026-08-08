@@ -2,38 +2,8 @@ from typing import Sequence, Tuple
 
 import fitz
 
-
-def get_pdf_image_pixmap_dpi(pdf_bytes: bytes) -> int | None:
-    """Return the highest native DPI among all embedded images in *pdf_bytes*.
-
-    Reads XObject dictionaries from a PDF without rasterizing pages and
-    returns the maximum inferred DPI (pixels-per-inch).  Returns None if no
-    images could be found.
-    """
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    best_dpi: int | None = None
-
-    for page in doc:
-        images = page.get_images(full=True)
-
-        mediabox = page.mediabox
-        width_pts = mediabox[2] - mediabox[0]
-        w_inch = width_pts / 72
-        if w_inch <= 0:
-            continue
-
-        for img in images:
-            xobj_width = img[2]  # px from XObject Width key
-            if xobj_width <= 0:
-                continue
-
-            dpi_x = int(xobj_width / w_inch)
-            if best_dpi is None or dpi_x > best_dpi:
-                best_dpi = dpi_x
-
-    doc.close()
-    return best_dpi
+# Suppress error printouts to stdout — they mess with the JSON LLM output.
+fitz.TOOLS.mupdf_display_errors(False)  # type:ignore
 
 
 def render_pdf_pages_to_png(
