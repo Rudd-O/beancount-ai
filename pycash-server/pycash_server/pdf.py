@@ -72,6 +72,9 @@ def render_pdf_pages_to_png(
         # default fallback before applying zoom
         if dpi is None:
             dpi = 300
+        # also use a minimum DPI in case of PDFs with no images
+        elif dpi < 150:
+            dpi = 150
 
         zoom = dpi / 72
         mat = fitz.Matrix(zoom, zoom)
