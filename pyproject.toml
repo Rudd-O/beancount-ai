@@ -10,8 +10,8 @@ requires-python = ">=3.14"
 dependencies = ["openwebui-client", "beancount", "colorama", "PyMuPDF"]
 
 [project.scripts]
-pycash-server = "beancount_ai.server.cli:main"
-pycash-client = "beancount_ai.client.cli:main"
+bean-ai-server = "beancount_ai.server.cli:main"
+bean-ai = "beancount_ai.client.cli:main"
 
 [tool.setuptools.package-data]
 "beancount_ai" = ["*.md"]

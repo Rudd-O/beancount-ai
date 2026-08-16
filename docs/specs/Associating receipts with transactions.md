@@ -16,30 +16,30 @@ This feature adds a new `associate` CLI subcommand that pairs receipt files alre
 
 ## Phase 1: Server-side receipt date & amount extraction
 
-**New server subcommand: `pycash.ReceiptInfo <hex_filename>`** (or extend the existing process contract)
+**New server subcommand: `beanai.ReceiptInfo <hex_filename>`** (or extend the existing process contract)
 
 - The server already extracts date/amount from receipts during LLM processing. We need to add a lightweight way for the client to get just these two fields without the full transaction generation.
-- **Option A (preferred):** Add a new `pycash.ReceiptInfo` subcommand that uses a slimmed-down LLM prompt to output `{date: "YYYY-MM-DD", amount: "...", currency: "CHF"}` — minimal tokens, fast response.
-- **Option B:** Use the existing `pycash.Process` output's parsed JSON for both date and amount extraction (the transaction text has a date line), avoiding a second LLM call. This is simpler but requires more client-side parsing.
+- **Option A (preferred):** Add a new `beanai.ReceiptInfo` subcommand that uses a slimmed-down LLM prompt to output `{date: "YYYY-MM-DD", amount: "...", currency: "CHF"}` — minimal tokens, fast response.
+- **Option B:** Use the existing `beanai.Process` output's parsed JSON for both date and amount extraction (the transaction text has a date line), avoiding a second LLM call. This is simpler but requires more client-side parsing.
 
 **Recommendation: Use Option A.** The LLM is already invoked to extract date/amount from the receipt image, so we can use that output's parsed JSON rather than writing fragile parser logic on the client. We create a separate slimmed-down prompt (or reuse with different instructions) to minimize cost/latency.
 
 Actually — wait. Re-reading the flow more carefully:
 
-- The receipt is already processed by `pycash.Process` in the existing pipeline, which outputs JSON with `transaction` and `payment_accounts`.
+- The receipt is already processed by `beanai.Process` in the existing pipeline, which outputs JSON with `transaction` and `payment_accounts`.
 - We **can** extract the date (line 1 parsing) and amounts (individual ledger legs) from that output without any extra LLM call.
 - But we need a clean date + total amount pair. The receipt's *total paid* is what matters for matching, not the individual legs.
 
-**Final recommendation:** Extract date and total amount from the existing `pycash.Process` JSON output (the transaction text). The LLM already produces the parsed data; no new server work needed beyond what's already described in the spec ("Process the receipt to identify its date and payment amount").
+**Final recommendation:** Extract date and total amount from the existing `beanai.Process` JSON output (the transaction text). The LLM already produces the parsed data; no new server work needed beyond what's already described in the spec ("Process the receipt to identify its date and payment amount").
 
-Phase 1 revised: The `associate` command invokes `pycash.Process` as normal to get the Beancount transaction + payment accounts from the LLM. From this same output, extract:
+Phase 1 revised: The `associate` command invokes `beanai.Process` as normal to get the Beancount transaction + payment accounts from the LLM. From this same output, extract:
 - **Receipt date**: from line 1 of the transaction (YYYY-MM-DD)
 - **Total receipt amount**: sum of all expense leg amounts  
 These two values come "for free" from the existing processing pipeline — no extra server work needed beyond what's already described in the spec.
 
 ## Phase 2: Client-side candidate fetching (Beancount parsing)
 
-**New client module: `pycash_client/beancount_parser.py`**
+**New client module: `beancount_ai/client/beancount_parser.py`**
 
 Creates a new Python module that parses the relevant Beancount files to find transaction candidates within ±2 days of the receipt date.
 
@@ -72,11 +72,11 @@ The parser needs to:
 - **Client constructs a prompt message** containing the receipt info + all candidates in a structured format.
 - **Two options for getting this evaluated by LLM:**
   
-  - **Option A (preferred):** Add a new server subcommand `pycash.MatchCandidates` that takes: (1) receipt image bytes, (2) candidate list as JSON. The LLM evaluates which candidate matches the receipt and outputs `{best_match_index: N, confidence_score: X.Y, top_k: [{index, score}, ...]}`.
+  - **Option A (preferred):** Add a new server subcommand `beanai.MatchCandidates` that takes: (1) receipt image bytes, (2) candidate list as JSON. The LLM evaluates which candidate matches the receipt and outputs `{best_match_index: N, confidence_score: X.Y, top_k: [{index, score}, ...]}`.
   
   - **Option B:** Create a new slimmed-down processing prompt that instructs the LLM to compare the receipt against candidate transactions rather than generate new ones.
 
-**Recommendation: Option A — a dedicated subcommand `pycash.MatchCandidates`.** This is cleaner because:
+**Recommendation: Option A — a dedicated subcommand `beanai.MatchCandidates`.** This is cleaner because:
 - It has its own focused prompt (much shorter than the full receipt conversion prompt)
 - It takes receipt image + candidates JSON as input
 - Returns structured match results
@@ -133,7 +133,7 @@ The receipt organization flow remains identical to the current `organize` comman
 ## Detailed command flow for `associate <filename>`
 
 ```
-1. Client calls pycash.Process <filename> (server-side LLM processing)
+1. Client calls beanai.Process <filename> (server-side LLM processing)
    -> Returns: {transaction, payment_accounts}
    
 2. Client extracts from transaction text:
@@ -144,7 +144,7 @@ The receipt organization flow remains identical to the current `organize` comman
 4. Client filters candidates to date ∈ [receipt_date ± 2 days]
 5. Client formats candidates as list for LLM scoring
    
-6. Client calls pycash.MatchCandidates <hex_filename> <candidates_json_base64>
+6. Client calls beanai.MatchCandidates <hex_filename> <candidates_json_base64>
    (server receives receipt image + candidates, passes to LLM)
    
 7. Server LLM returns {matches: [{index, score, reason}, ...]}
@@ -153,7 +153,7 @@ The receipt organization flow remains identical to the current `organize` comman
 9. If len(matches) == 1 or top_score >> second_score: auto-select top
    Else present ranked list to user for selection
    
-10. Client: call pycash.Fetch <filename> to download receipt bytes
+10. Client: call beanai.Fetch <filename> to download receipt bytes
     (already have these from step 1 via the LLM processing, so may skip fetch)
     -> Actually, step 1 processes the receipt via LLM but doesn't return raw receipt bytes.
        The import pipeline uses explicit fetch for this reason. So yes, need a fetch.
@@ -173,16 +173,15 @@ The receipt organization flow remains identical to the current `organize` comman
 
 | File | Purpose |
 |---|---|
-| `pycash-client/pycash_client/beancount_parser.py` | Parse Beancount transaction files, extract candidates |
-| `pycash-server/pycash_server/match_prompt.md` | Slimmed-down LLM prompt for candidate matching (noting: should be named to not conflict; maybe `RECEIPT_MATCH_PROMPT.md` or inline it — see below) |
+| `beancount_ai/client/beancount_parser.py` | Parse Beancount transaction files, extract candidates |
+| `beancount_ai/server/RECEIPT_MATCH_PROMT.md` | Slimmed-down LLM prompt for candidate matching |
 
 **Modified files:**
 
 | File | Changes |
 |---|---|
-| `pycash-client/pycash_client/cli.py` | New `associate` subcommand, Beancount parsing integration, candidate formatting, metadata editing logic |
-| `pycash-server/pycash_server/cli.py` | New `do_match_candidates` handler (or inline the prompt) |
-| `pycash-client/pyproject.toml` | No new deps if manual parsing is used |
+| `beancount_ai/client/cli.py` | New `associate` subcommand, Beancount parsing integration, candidate formatting, metadata editing logic |
+| `beancount_ai/server/cli.py` | New `do_match_candidates` handler (or inline the prompt) |
 
 **Prompt content:** The match prompt can be either a separate file or embedded in code. Given its small size (~30-40 lines), **embedding in server code as a string constant** is cleaner and avoids a second file to manage (the existing `RECEIPT_CONVERSION_PROMPT.md` exists because of its length at 146 lines).
 

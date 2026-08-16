@@ -6,39 +6,39 @@
 cash-receipt-importer/
 ├── docs/*.md                                  # general documentation of the program, features, commands, and use
 └── docs/specs/…                               # specs for features in development
+│── pyproject.toml                             # Python project definition and configuration ifle
 │
-├── pycash-server/                             # Runs on server VM which has access to receipts and LLM
-│   ├── pyproject.toml                         # entry-point: pycash-server = ...cli:main
-│   └── pycash_server/cli.py                   # pycash.List + pycash.Process subcommands
-│   └── pycash-server/pdf.py                   # PDF→PNG conversion for receipt images
-│   └── pycash-server/*_PROMPT.md              # prompts for LLMs
+├── beancount_ai/server/                       # Runs on server VM which has access to receipts and LLM
+│   └── cli.py                                 # beanai.List + beanai.Process subcommands
+│   └── pdf.py                                 # PDF→PNG conversion for receipt images
+│   └── *_PROMPT.md                            # prompts for LLMs
 │
-└── pycash-client/                             # Runs on client VM which has Beancount data
-    ├── pyproject.toml                         # entry-point: pycash-client = ...cli:main
-    └── pycash_client/cli.py                   # list + process subcommands → calls server via qrexec/local
+└── beancount_ai/client/                       # Runs on client VM which has Beancount data
+    └── cli.py                                 # list + process subcommands → calls server via qrexec/local
+    └── beancount_loader.py                    # loads Beancount data
+    └── report.py                              # small temporary module to produce reports on modifications of Beancount files
 ```
 
-Two independent setuptools packages
-
-For now, no test framework, no lint/typecheck config, no CI.  This can be improved in the future.
+Tox (`tox --current-env`) is the test framework, and it runs Ruff, MyPy and pytest.
 
 ## How to run
 
-**pycash-server** — runs on the VM that has receipt files + LLM access. CLI subcommands:
-- `pycash-server pycash.List -d <receipts-dir>`  lists receipts as JSON
-- `pycash-server pycash.Process <filename>`        processes one receipt via Open-WebUI (produces JSONL output)
+**bean-ai-server** — runs on the VM that has receipt files + LLM access. CLI subcommands:
+- `bean-ai-server beanai.List -d <receipts-dir>`  lists receipts as JSON
+- `bean-ai-server beanai.Process <filename>`        processes one receipt via Open-WebUI (produces JSONL output)
 
-**pycash-client** — runs on the VM with Beancount data. CLI subcommands:
-- `pycash-client list`        → prints receipt filenames (one per line)
-- `pycash-client process <file>` → streams LLM response, prints parsed Beancount tx to stdout
+**bean-ai** — runs on the VM with Beancount data. CLI subcommands:
+- `bean-ai list`        → prints receipt filenames (one per line)
+- `bean-ai process <file>` → streams LLM response, prints parsed Beancount tx to stdout
 
-Default config: `~/.config/pycash.json`. Both clients also support `--config <path>` and `$PYCASH_CONFIG`.
+Default config: `~/.config/bean-ai.json`. Both clients also support `--config <path>` and `$BEAN_AI_CONFIG`.
 
-**Local testing**: set `"target_vm": null` in config so the client spawns the server as a subprocess (arguments hex-encoded just as if the server were running in a separate VM).
+**Local testing**: set `"target_vm": null` in client config so the client spawns the server as a subprocess
+(arguments hex-encoded just as if the server were running in a separate VM).
 
-## Configuration (`~/.config/pycash.json`)
+## Configuration (`~/.config/bean-ai.json`)
 
-Both programs read from the same config file by default `~/.config/pycash.json` (but see below for more).
+Both programs read from the same config file by default `~/.config/bean-ai.json` (but see below for more).
 
 ### Server configuration fields
 
@@ -56,7 +56,7 @@ Both programs read from the same config file by default `~/.config/pycash.json` 
 
 | Field | Type | Description |
 |---|---|---|
-| `target_vm` | `str \| null` | Name of the Qubes VM where pycash-server runs. If `null`, client invokes `pycash-server` locally via subprocess for local testing support. |
+| `target_vm` | `str \| null` | Name of the Qubes VM where bean-ai-server runs. If `null`, client invokes `bean-ai-server` locally via subprocess for local testing support. |
 | `beancount_folder` | `Path` | Root directory of the Beancount project |
 | `beancount_main_file` | `str` | Path to the main Beancount ledger file relative to ``beancount_folder`` |
 | `beancount_transaction_destination_file` | `str` | Filename to append ingested transactions to |
@@ -64,8 +64,8 @@ Both programs read from the same config file by default `~/.config/pycash.json` 
 ### Configuration resolution order
 
 1. `--config <path>` CLI flag
-2. `$PYCASH_CONFIG` env var
-3. Default `~/.config/pycash.json`
+2. `$BEAN_AI_CONFIG` env var
+3. Default `~/.config/bean-ai.json`
 
 First match wins; subsequent calls to `Configuration.load()` are cached.
 
@@ -94,7 +94,9 @@ Client has the ability to send stdin to server, and server can respond via stdou
 ## Key files (do not change without checking spec)
 
 - `RECEIPT_CONVERSION_PROMPT.md` — tested LLM prompt for receipt→Beancount conversion. Do not modify without verifying against docs/specs.
-- `pycash_server/pdf.py` — handles multi-page PDF → PNG for receipt ingestion.
+- `RECEIPT_INFO_PROMPT.md` — also do not change, it's manually tested.
+- `RECEIPT_MATCH_PROMPT.md` — same.  Do not change.
+- `beancount_ai/server/pdf.py` — handles multi-page PDF → PNG for receipt ingestion.
 
 ## Gotchas
 

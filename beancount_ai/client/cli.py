@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""pycash-client — CLI wrapper that talks to pycash-server on `pim` via qrexec.
+"""bean-ai — CLI wrapper that talks to bean-ai-server on `pim` via qrexec.
 
-Subcommands (mirror those of pycash-server):
-    list    Get the remote receipt file list as plain text (one file per line)
-
-Config is read from ~/.config/pycash.json.
+Config is read from ~/.config/bean-ai.json.
 """
 
 import difflib
@@ -24,7 +21,7 @@ from .report import append_to_report
 from .beancount_loader import load_transaction_contexts, MatchResults  # type:ignore
 
 
-CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
+CONF_DEFAULT = Path.home() / ".config" / "bean-ai.json"
 
 
 # -- configuration ---------------------------------------------------------
@@ -40,13 +37,13 @@ def demarkdownify(llm_output: str) -> str:
 
 
 class Configuration:
-    """Configuration loaded from a pycash JSON config file.
+    """Configuration loaded from a bean-ai JSON config file.
 
     Singleton that caches its first loaded instance at the class level.
     Use :meth:`load` to retrieve or initialise it.
 
     Attributes:
-        target_vm: Name of the Qubes VM where pycash-server runs (None to spawn locally).
+        target_vm: Name of the Qubes VM where bean-ai-server runs (None to spawn locally).
         beancount_folder: Root directory of the Beancount project.
         beancount_main_file: Path to the main Beancount ledger file relative to ``beancount_folder``.
         beancount_transaction_destination_file: Filename to append ingested transactions to.
@@ -68,12 +65,12 @@ class Configuration:
 
         Priority (highest → lowest):
             1. ``--config`` CLI argument
-            2. ``PYCASH_CONFIG`` environment variable
-            3. Default ``~/.config/pycash.json``
+            2. ``BEAN_AI_CONFIG`` environment variable
+            3. Default ``~/.config/bean-ai.json``
         """
         if override:
             return Path(override)
-        env_cfg = os.environ.get("PYCASH_CONFIG")
+        env_cfg = os.environ.get("BEAN_AI_CONFIG")
         if env_cfg:
             return Path(env_cfg)
         return CONF_DEFAULT
@@ -187,9 +184,9 @@ class RemoteVM:
             # arguments must be hex
             arg = arg.encode("utf-8").hex()
 
-        # Local fallback for testing: when target_vm is None, invoke pycash-server directly.
+        # Local fallback for testing: when target_vm is None, invoke bean-ai-server directly.
         if self.target_vm is None:
-            cmd = ["pycash-server", "--config", str(Configuration.cfg_path)]
+            cmd = ["bean-ai-server", "--config", str(Configuration.cfg_path)]
             if arg is not None:
                 cmd.extend([action, arg])
             else:
@@ -214,7 +211,7 @@ class RemoteVM:
         """
 
         cmd, proc, stdin, stdout = self._call(
-            "pycash.List"
+            "beanai.List"
             + ("Uningested" if category == "uningested" else "Unassociated")
         )
         stdin.close()
@@ -237,7 +234,7 @@ class RemoteVM:
         and the main payment account.
         """
         cmd, proc, stdin, stdout = self._call(
-            "pycash.HelpAssociateReceipt", arg=filename
+            "beanai.HelpAssociateReceipt", arg=filename
         )
         # FIXME caller of this rawdogs it, but the comms logic should be encapsulated in a class later.
         return cmd, proc, stdin, stdout
@@ -247,7 +244,7 @@ class RemoteVM:
         Calls upon the LLM on the server side to produce a Beancount transaction
         and the main payment account.
         """
-        cmd, proc, stdin, stdout = self._call("pycash.Process", arg=filename)
+        cmd, proc, stdin, stdout = self._call("beanai.Process", arg=filename)
         stdin.close()
 
         llm_output = stream_reasoning_and_capture_output(stdout)
@@ -280,7 +277,7 @@ class RemoteVM:
         return transaction, payment_account
 
     def fetch_receipt(self, filename: str) -> bytes:
-        cmd, proc, stdin, stdout = self._call("pycash.Fetch", arg=filename)
+        cmd, proc, stdin, stdout = self._call("beanai.Fetch", arg=filename)
         stdin.close()
 
         raw = stdout.read()
@@ -291,7 +288,7 @@ class RemoteVM:
         return raw
 
     def remove_receipt(self, filename: str) -> None:
-        cmd, proc, stdin, _ = self._call("pycash.Remove", arg=filename)
+        cmd, proc, stdin, _ = self._call("beanai.Remove", arg=filename)
         stdin.close()
 
         ret = proc.wait()
@@ -485,7 +482,7 @@ class ImportResult:
         with open(self.transaction_destination_path, "a") as f:
             self.rollback_size = self.transaction_destination_path.stat().st_size
             # no marker line is necessary, the transaction has a link to the document in it.
-            # f.write("\n; {} imported by pycash.\n".format(args.filename))
+            # f.write("\n; {} imported by bean-ai.\n".format(args.filename))
             f.write("\n\n" + self.transaction_text.strip() + "\n")
             f.flush()
 
@@ -769,7 +766,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
     Flow:
       1. Process the receipt → get date + amount from LLM.
       2. Query Beancount for candidates within -1/+45 days.
-      3. Send candidates to pycash.MatchCandidates on server.
+      3. Send candidates to beanai.MatchCandidates on server.
       4. If unambiguous, auto-select + update document metadata.
       5. If ambiguous, present ranked list to user.
       6. Organize the receipt file.
@@ -1038,15 +1035,15 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="pycash-client",
-        description="qrexec client for pycash",
+        prog="bean-ai",
+        description="qrexec client for bean-ai",
     )
     ap.add_argument(
         "--config",
         "-c",
         default=None,
         dest="conf_path",
-        help="Path to the config file; overrides $PYCASH_CONFIG and the default",
+        help="Path to the config file; overrides $BEAN_AI_CONFIG and the default",
     )
     sp = ap.add_subparsers(dest="command")
 

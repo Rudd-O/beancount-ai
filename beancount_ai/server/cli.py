@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""pycash-server — qrexec RPC service for receipt processing (runs on pym).
+"""bean-ai-server — qrexec RPC service for receipt processing (runs on VM with receipts).
 
 Subcommands:
     list    List receipt filenames to import (JSON output)
 
-Config is read from ~/.config/pycash.json unless overridden.
+Config is read from ~/.config/bean-ai.json unless overridden.
 As a qrexec service, it reads nothing from stdin and only writes structured results to stdout.
 """
 
@@ -27,7 +27,7 @@ from openai.types.chat import (
 )
 from .pdf import render_pdf_pages_to_png
 
-CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
+CONF_DEFAULT = Path.home() / ".config" / "bean-ai.json"
 RECEIPT_CONVERSION_PROMPT_PATH = (
     Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
 )
@@ -38,7 +38,7 @@ RECEIPT_INFO_PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_INFO_PROMP
 
 
 class Configuration:
-    """Configuration loaded from a pycash JSON config file.
+    """Configuration loaded from a bean-ai JSON config file.
 
     Singleton that caches its first loaded instance at the class level.
     Use :meth:`load` to retrieve or initialise it.
@@ -74,12 +74,12 @@ class Configuration:
 
         Priority (highest → lowest):
             1. ``--config`` CLI argument
-            2. ``PYCASH_CONFIG`` environment variable
-            3. Default ``~/.config/pycash.json``
+            2. ``BEAN_AI_CONFIG`` environment variable
+            3. Default ``~/.config/bean-ai.json``
         """
         if override:
             return Path(override)
-        env_cfg = os.environ.get("PYCASH_CONFIG")
+        env_cfg = os.environ.get("BEAN_AI_CONFIG")
         if env_cfg:
             return Path(env_cfg)
         return CONF_DEFAULT
@@ -475,30 +475,30 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="pycash-server",
-        description="qrexec RPC service for pycash",
+        prog="bean-ai-server",
+        description="qrexec RPC service for bean-ai",
     )
     ap.add_argument(
         "--config",
         "-c",
         default=None,
         dest="conf_path",
-        help="Path to the config file; overrides $PYCASH_CONFIG and the default",
+        help="Path to the config file; overrides $BEAN_AI_CONFIG and the default",
     )
 
     sp = ap.add_subparsers(dest="command")
 
     sp.add_parser(
-        "pycash.ListUningested",
+        "beanai.ListUningested",
         help="List receipt filenames to import as transactions (JSON)",
     )
     sp.add_parser(
-        "pycash.ListUnassociated",
+        "beanai.ListUnassociated",
         help="List receipt filenames to associate with transactions (JSON)",
     )
 
     fetch_cmd = sp.add_parser(
-        "pycash.Fetch", help="Write the raw contents of a receipt file to stdout"
+        "beanai.Fetch", help="Write the raw contents of a receipt file to stdout"
     )
     fetch_cmd.add_argument(
         "filename",
@@ -506,7 +506,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     remove_cmd = sp.add_parser(
-        "pycash.Remove", help="Delete a receipt file from WebDAV"
+        "beanai.Remove", help="Delete a receipt file from WebDAV"
     )
     remove_cmd.add_argument(
         "filename",
@@ -514,7 +514,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     process_cmd = sp.add_parser(
-        "pycash.Process", help="Process a receipt image via Open-WebUI"
+        "beanai.Process", help="Process a receipt image via Open-WebUI"
     )
     process_cmd.add_argument(
         "filename",
@@ -522,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     match_cmd = sp.add_parser(
-        "pycash.HelpAssociateReceipt",
+        "beanai.HelpAssociateReceipt",
         help="Match a receipt against candidate transactions (candidates via stdin)",
     )
     match_cmd.add_argument(
@@ -546,12 +546,12 @@ def main() -> None:
     cfg = Configuration.load(args.conf_path)
 
     dispatch = {
-        "pycash.ListUningested": do_list_uningested,
-        "pycash.ListUnassociated": do_list_unassociated,
-        "pycash.Fetch": do_fetch,
-        "pycash.Process": do_process,
-        "pycash.HelpAssociateReceipt": do_help_associate_receipt,
-        "pycash.Remove": do_remove,
+        "beanai.ListUningested": do_list_uningested,
+        "beanai.ListUnassociated": do_list_unassociated,
+        "beanai.Fetch": do_fetch,
+        "beanai.Process": do_process,
+        "beanai.HelpAssociateReceipt": do_help_associate_receipt,
+        "beanai.Remove": do_remove,
     }
     handler = dispatch.get(args.command)
     if handler is None:
