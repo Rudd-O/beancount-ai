@@ -14,6 +14,7 @@ import datetime
 from functools import partial
 import json
 import os
+import ssl
 import sys
 from pathlib import Path
 from typing import TypedDict, cast, Literal
@@ -26,6 +27,7 @@ from openai.types.chat import (
     ChatCompletionContentPartTextParam,
     ChatCompletionMessageParam,
 )
+
 from .config import Configuration, WebDAVDocumentSourcesConfiguration
 from .pdf import render_pdf_pages_to_png
 
@@ -34,6 +36,24 @@ RECEIPT_CONVERSION_PROMPT_PATH = (
 )
 RECEIPT_MATCH_PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_MATCH_PROMPT.md"
 RECEIPT_INFO_PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_INFO_PROMPT.md"
+
+
+def _ssl_verify_path() -> str:
+    """Resolve an SSL CA bundle path for use with ``httpx`` clients.
+
+    Falls back to ``certifi.where()`` when no OpenSSL default is configured.
+
+    This is important because, in some Linux distributions, by default
+    the OS certificate bundle is not paid attention to, resulting in
+    private CA certificates not being loaded, ultimately resulting in
+    SSL unverified errors.
+    """
+    ssl_paths = ssl.get_default_verify_paths()
+    if ssl_paths.cafile:
+        return ssl_paths.cafile
+    import certifi
+
+    return certifi.where()
 
 
 def file_to_image_parts(
@@ -198,7 +218,6 @@ def stream_reasoning_and_output(resp: Stream[ChatCompletionChunk]):
 
 
 def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
-    import ssl
     from httpx import Client as HttpxClient
     from openwebui_client import OpenWebUIClient
 
@@ -222,13 +241,7 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
         print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    ssl_paths = ssl.get_default_verify_paths()
-    if ssl_paths.cafile:
-        verify = ssl_paths.cafile
-    else:
-        import certifi
-
-        verify = certifi.where()
+    verify = _ssl_verify_path()
 
     client = OpenWebUIClient(
         api_key=cfg.ai.token,
@@ -320,8 +333,6 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
     The function loads the receipt image from WebDAV, feeds it to LLM together
     with candidate text, and writes structured match results to stdout as plain JSON.
     """
-    import ssl
-
     from httpx import Client as HttpxClient
     from openwebui_client import OpenWebUIClient
 
@@ -343,14 +354,7 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
         print(json.dumps({"error": f"cannot read {fn}: {e}"}))
         sys.exit(1)
 
-    # FIXME this is duplicated code, refactor.
-    ssl_paths = ssl.get_default_verify_paths()
-    if ssl_paths.cafile:
-        verify = ssl_paths.cafile
-    else:
-        import certifi
-
-        verify = certifi.where()
+    verify = _ssl_verify_path()
 
     client = OpenWebUIClient(
         api_key=cfg.ai.token,
