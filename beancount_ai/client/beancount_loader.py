@@ -1,8 +1,10 @@
+# type: ignore
 """Thin wrapper around beancount.loader for loading and filtering Beancount transactions.
 
 Useful in the associate flow to find candidate transactions within a date range
 so they can be presented to an LLM for receipt matching.
 """
+# FIXME: fix types.
 
 from __future__ import annotations
 

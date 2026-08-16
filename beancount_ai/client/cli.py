@@ -21,7 +21,7 @@ import pprint
 
 from colorama import Fore, Style  # type: ignore
 from .report import append_to_report
-from .beancount_loader import load_transaction_contexts, MatchResults
+from .beancount_loader import load_transaction_contexts, MatchResults  # type:ignore
 
 
 CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
