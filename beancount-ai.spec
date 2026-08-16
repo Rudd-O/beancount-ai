@@ -66,7 +66,7 @@ done
 %files -n python3-%{package_name} -f %{pyproject_files}
 %{_bindir}/bean-ai
 %{_bindir}/bean-ai-server
-%doc docs/
+%doc README.md docs/
 
 %files -n python3-%{package_name}-qubes-rpc
 %attr(0755, root, root) /etc/qubes-rpc/beanai.*
