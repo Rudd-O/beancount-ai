@@ -8,7 +8,7 @@
 %define mybuildnumber %{?build_number}%{?!build_number:1}
 
 Name:           python-%{package_name}
-Version:        0.1.1
+Version:        0.1.2
 Release:        %{mybuildnumber}%{?dist}
 Summary:        AI-powered tooling to process Beancount receipts
 
@@ -32,6 +32,7 @@ Summary:        %{summary}
 %package -n python3-%{package_name}-qubes-rpc
 Summary:        Provides Qubes services to invoke bean-ai-server from another Qubes OS VM
 Requires:       qubes-core-qrexec
+Requires:       python3-%{package_name} = %{version}-%{release}
 
 %description -n python3-%{package_name}-qubes-rpc %{expand:
 These are stub files to provide Qubes RPC services to VMs authorized to invoke bean-ai-server.}
@@ -65,6 +66,7 @@ done
 %files -n python3-%{package_name} -f %{pyproject_files}
 %{_bindir}/bean-ai
 %{_bindir}/bean-ai-server
+%doc docs/
 
 %files -n python3-%{package_name}-qubes-rpc
 %attr(0755, root, root) /etc/qubes-rpc/beanai.*

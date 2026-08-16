@@ -4,5 +4,4 @@ include docs/*
 include docs/*/*
 include beancount_ai/server/*.md
 include qubes-rpc/*
-include *.spec
 include Makefile
