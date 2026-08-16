@@ -1,4 +1,6 @@
-# Plan: Ingesting receipts and creating transactions
+# Spec: Ingesting receipts and creating transactions
+
+Status: developed.
 
 ## Overview
 

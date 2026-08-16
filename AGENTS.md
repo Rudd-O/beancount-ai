@@ -5,7 +5,7 @@
 ```
 beancount-ai/
 ├── docs/*.md                                  # general documentation of the program, features, commands, and use
-└── docs/specs/…                               # specs for features in development
+└── docs/specs/…                               # specs for features in development or developed
 │── pyproject.toml                             # Python project definition and configuration ifle
 │
 ├── beancount_ai/server/                       # Runs on server VM which has access to receipts and LLM

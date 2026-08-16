@@ -1,4 +1,6 @@
-# Plan: Associating receipts with transactions
+# Spec: Associating receipts with transactions
+
+Status: developed.
 
 ## Overview
 
