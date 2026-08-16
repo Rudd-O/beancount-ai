@@ -615,6 +615,16 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
 
     vm = RemoteVM.from_cfg(cfg)
     receipts = vm.list_receipts("uningested")
+
+    if args.filename:
+        for fn in args.filename:
+            if fn not in receipts:
+                print(f"Receipt {fn} does not exist on server.", file=sys.stderr)
+                sys.exit(1)
+        # All specified receipts exist on the server.  Let's override
+        # the list with what the user sent us.
+        receipts = args.filename
+
     if not receipts:
         print("No receipts to ingest.", file=sys.stderr)
         return
@@ -1050,7 +1060,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     process_cmd = sp.add_parser(
-        "process", help="Process a receipt image via Open-WebUI"
+        "process", help="Process a receipt image and produce Beancount output from it"
     )
     process_cmd.add_argument("filename", help="Filename of the receipt")
 
@@ -1070,13 +1080,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     imp_cmd = sp.add_parser(
         "import",
-        help="Partial ingest pipeline: LLM → organize → append to Beancount, but receipt in server is left alone",
+        help="Like ingest, but receipt in server is left alone instead of deleted",
     )
     imp_cmd.add_argument("filename", help="Filename of the receipt")
 
     ing_cmd = sp.add_parser(
         "ingest",
-        help="Batch ingest receipts interactively: process → organize → append → remove",
+        help="Batch / interactive ingest of receipt: process → organize → append → remove",
+    )
+    ing_cmd.add_argument(
+        "filename",
+        help="One or more receipt filenames (if none are present, all are processed)",
+        nargs="*",
     )
     ing_cmd.add_argument(
         "--batch",
