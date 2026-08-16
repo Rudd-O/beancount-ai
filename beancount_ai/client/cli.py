@@ -425,6 +425,24 @@ class ImportResult:
             file=sys.stderr,
         )
 
+    def diff(self) -> list[str]:
+        """Print a unified diff of what would be appended to the ingestion file."""
+        dest = self.ingestion_destination_path
+        current = dest.read_text(encoding="utf-8") if dest.exists() else ""
+        old_lines = current.splitlines(True) if current else []
+        appended = "\n\n" + self.transaction_text.strip() + "\n"
+        new_lines = (current + appended).splitlines(True)
+        diff = list(
+            difflib.unified_diff(
+                old_lines,
+                new_lines,
+                fromfile=str(dest),
+                tofile=str(dest),
+                n=5,
+            )
+        )
+        return diff
+
     def rollback(self) -> None:
         assert self.rollback_size is not None
         eee: Exception | None = None
@@ -515,6 +533,13 @@ def do_import(cfg: Configuration, args: argparse.Namespace) -> None:
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
     result = ImportResult(RemoteVM.from_cfg(cfg), cfg.beancount, args.filename)
+
+    diff = result.diff()
+    if diff:
+        print("--- Changes ---", file=sys.stdout)
+        for line in diff:
+            sys.stdout.write(line)
+
     result.commit()
 
 
@@ -580,8 +605,18 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
         except Exception as e:
             raise Exception(f"Import of {receipt} failed: {e}") from e
 
+        # Show a diff.
+        diff = imp.diff()
+        if diff:
+            print("--- Changes ---", file=sys.stdout)
+            for line in diff:
+                sys.stdout.write(line)
+
         # Commit the successful import.
-        if action == "import":
+        if action != "import":
+            print("No files were changed.", file=sys.stderr)
+            return
+        else:
             try:
                 imp.commit()
             except Exception as e:
