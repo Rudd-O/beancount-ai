@@ -1,9 +1,9 @@
-# AGENTS.md — cash-receipt-importer
+# AGENTS.md — beancount-ai
 
 ## Structure
 
 ```
-cash-receipt-importer/
+beancount-ai/
 ├── docs/*.md                                  # general documentation of the program, features, commands, and use
 └── docs/specs/…                               # specs for features in development
 │── pyproject.toml                             # Python project definition and configuration ifle
