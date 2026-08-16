@@ -20,6 +20,7 @@ cash-receipt-importer/
 ```
 
 Tox (`tox --current-env`) is the test framework, and it runs Ruff, MyPy and pytest.
+You can invoke the tests using command `make qa`.
 
 ## How to run
 
