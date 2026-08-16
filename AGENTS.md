@@ -70,7 +70,6 @@ Client has the ability to send stdin to server, and server can respond via stdou
 - `RECEIPT_CONVERSION_PROMPT.md` — tested LLM prompt for receipt→Beancount conversion. Do not modify without verifying against docs/specs.
 - `RECEIPT_INFO_PROMPT.md` — also do not change, it's manually tested.
 - `RECEIPT_MATCH_PROMPT.md` — same.  Do not change.
-- `beancount_ai/server/pdf.py` — handles multi-page PDF → PNG for receipt ingestion.
 
 ## Gotchas
 
