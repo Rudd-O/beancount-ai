@@ -17,7 +17,7 @@ URL:            https://github.com/Rudd-O/%{package_name}
 Source:         %{module_name}-%{version}.tar.gz
 
 BuildArch:      noarch
-BuildRequires:  pyproject-rpm-macros, python3-devel, python3-setuptools
+BuildRequires:  pyproject-rpm-macros, python3-devel, python3-setuptools, coreutils
 
 %global _description %{expand:
 A set of programs to help you use AI to import and manage scanned receipts into Beancount.}
@@ -28,6 +28,13 @@ A set of programs to help you use AI to import and manage scanned receipts into 
 Summary:        %{summary}
 
 %description -n python3-%{package_name} %_description
+
+%package -n python3-%{package_name}-qubes-rpc
+Summary:        Provides Qubes services to invoke bean-ai-server from another Qubes OS VM
+Requires:       qubes-core-qrexec
+
+%description -n python3-%{package_name}-qubes-rpc %{expand:
+These are stub files to provide Qubes RPC services to VMs authorized to invoke bean-ai-server.}
 
 %prep
 %autosetup -p1 -n %{module_name}-%{version}
@@ -43,6 +50,11 @@ Summary:        %{summary}
 %install
 %pyproject_install
 
+mkdir -p %{buildroot}/etc/qubes-rpc
+for rpc in qubes-rpc/* ; do
+  install -m 755 -t %{buildroot}/etc/qubes-rpc "$rpc"
+done
+
 %pyproject_save_files %{module_name}
 
 
@@ -53,6 +65,9 @@ Summary:        %{summary}
 %files -n python3-%{package_name} -f %{pyproject_files}
 %{_bindir}/bean-ai
 %{_bindir}/bean-ai-server
+
+%files -n python3-%{package_name}-qubes-rpc
+%attr(0755, root, root) /etc/qubes-rpc/beanai.*
 
 %changelog
 * Sun Aug 16 2026 Manuel Amador <rudd-o@rudd-o.com> 0.1.0

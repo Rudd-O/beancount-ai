@@ -13,7 +13,7 @@ clean:
 tox:
 	tox --current-env
 
-$(SOURCE):
+$(SOURCE): qubes-rpc/* beancount_ai/* beancount_ai/*/* MANIFEST.in pyproject.toml tox.ini beancount-ai.spec Makefile
 	python3 -m build
 
 dist: $(SOURCE)
@@ -28,7 +28,7 @@ $(RPM): $(SRPM)
 
 rpm: $(RPM)
 
-rpm-notests: $(RPM)
+rpm-notests: $(SRPM)
 	rpmbuild --define '%disable_tests true' --define '%_rpmdir dist' --rebuild $(SRPM)
 
 qa: tox

@@ -1,0 +1,3 @@
+#!/bin/bash
+
+exec bean-ai-server beanai.Remove "$@"
