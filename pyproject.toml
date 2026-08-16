@@ -1,20 +1,20 @@
-
 [build-system]
 requires = ["setuptools>=42"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pycash-client"
+name = "beancount-ai"
 version = "0.1.0"
 description = "Help import cash receipts into Beancount via Open-WebUI LLM"
 requires-python = ">=3.14"
-dependencies = ["beancount", "colorama"]
+dependencies = ["openwebui-client", "beancount", "colorama"]
 
 [project.scripts]
-pycash-client = "pycash_client.cli:main"
+pycash-server = "beancount_ai.server.cli:main"
+pycash-client = "beancount_ai.client.cli:main"
 
-[tool.setuptools.packages.find]
-include = ["pycash_client"]
+[tool.setuptools.package-data]
+"beancount_ai" = ["*.md"]
 
 [tool.mypy]
 warn_redundant_casts = true

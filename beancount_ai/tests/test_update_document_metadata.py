@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Tests for update_document_metadata."""
 
-import sys, pathlib, textwrap
+import sys
+import pathlib
 
 # Ensure parent dir is on path so we can import cli module directly.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from pycash_client.cli import update_document_metadata
+from beancount_ai.client.cli import update_document_metadata
 
 
 def _lines(*s: str) -> str:

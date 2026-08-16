@@ -1,15 +1,11 @@
-.PHONY: qa lint typecheck clean
+.PHONY: qa tox clean
 
-lint:
-	ruff check pycash-server/pycash_server/
-	ruff check pycash-client/pycash_client/
+clean:
+	rm -rf .tox *.egg-info dist .mypy_cache .ruff_cache
 
-typecheck: typecheck-server typecheck-client
+# Requires RPM python3-tox-current-env installed.
+# Also requires mypy, tox, ruff, pytest.
+tox:
+	tox --current-env
 
-typecheck-server:
-	cd pycash-server && python -m mypy .
-
-typecheck-client:
-	cd pycash-client && python -m mypy .
-
-qa: lint typecheck
+qa: tox

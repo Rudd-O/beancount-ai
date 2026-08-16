@@ -14,14 +14,14 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import date, timedelta
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import ClassVar, IO, Literal, cast, Any
 import pprint
 
-from colorama import Fore, Style
-from pycash_client.report import append_to_report
-from pycash_client.beancount_loader import load_transaction_contexts, MatchResults
+from colorama import Fore, Style  # type: ignore
+from .report import append_to_report
+from .beancount_loader import load_transaction_contexts, MatchResults
 
 
 CONF_DEFAULT = Path.home() / ".config" / "pycash.json"
@@ -463,7 +463,7 @@ class ImportResult:
             .strip()
         )
         # Take the text containing the date, and make a date for the receipt file name.
-        transdate = date.strptime(datestr, "%Y-%m-%d")  # type: ignore
+        transdate = datetime.strptime(datestr, "%Y-%m-%d").date()
 
         receipt_path = predict_receipt_destination_path(
             beancount_folder, transdate, filename, account, reststr
@@ -723,7 +723,7 @@ def do_organize(cfg: Configuration, args: argparse.Namespace) -> None:
     See `predict_receipt_destination_path` for requirements imposed on Beancount document
     file naming.
     """
-    tdate = date.strptime(args.date, "%Y-%m-%d")  # type:ignore
+    tdate = datetime.strptime(args.date, "%Y-%m-%d").date()
     receipt_path = organize_receipt(
         cfg.beancount_folder, RemoteVM.from_cfg(cfg), tdate, args.filename, args.account
     )
@@ -788,7 +788,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
     receipt_info = load_json(llm_output)
 
     try:
-        receipt_date = date.strptime(receipt_info["date"], "%Y-%m-%d")  # type:ignore
+        receipt_date = datetime.strptime(receipt_info["date"], "%Y-%m-%d").date()
     except KeyError:
         receipt_date = None
     try:

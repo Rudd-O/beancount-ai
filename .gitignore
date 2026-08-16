@@ -4,3 +4,5 @@ dist
 *.whl
 *.pyc
 *.bean
+.tox
+__pycache__
