@@ -5,3 +5,4 @@ include docs/*/*
 include beancount_ai/server/*.md
 include qubes-rpc/*
 include Makefile
+include README.md
