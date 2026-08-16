@@ -33,6 +33,8 @@ bean-ai ingest
 bean-ai associate
 ```
 
+Find a reference to all subcommands in the [Commands](docs/Commands.md) documentation.
+
 ## Details
 
 ### Batch operation
