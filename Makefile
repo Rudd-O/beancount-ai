@@ -1,3 +1,8 @@
+VERSION := $(shell grep ^Version: *spec | sed 's/Version: *//')
+SOURCE := dist/beancount_ai-$(VERSION).tar.gz
+SRPM := dist/$(shell rpmspec -q --qf "%{name}-%{version}-%{release}.src.rpm\n" *.spec | grep -v python3)
+RPM := dist/$(shell rpmspec -q --qf "noarch/%{name}-%{version}-%{release}.noarch.rpm\n" *.spec | grep python3)
+
 .PHONY: qa tox clean dist srpm rpm
 
 clean:
@@ -8,16 +13,22 @@ clean:
 tox:
 	tox --current-env
 
-dist:
+$(SOURCE):
 	python3 -m build
 
-srpm: dist
+dist: $(SOURCE)
+
+$(SRPM): $(SOURCE)
 	rpmbuild --define '%_sourcedir dist' --define '%_srcrpmdir dist' -bs *spec
 
-rpm: srpm
-	rpmbuild --define '%_rpmdir dist' --rebuild dist/python-beancount-ai-*.src.rpm
+srpm: $(SRPM)
 
-rpm-notests: srpm
-	rpmbuild --define '%disable_tests true' --define '%_rpmdir dist' --rebuild dist/python-beancount-ai-*.src.rpm
+$(RPM): $(SRPM)
+	rpmbuild --define '%_rpmdir dist' --rebuild $(SRPM)
+
+rpm: $(RPM)
+
+rpm-notests: $(RPM)
+	rpmbuild --define '%disable_tests true' --define '%_rpmdir dist' --rebuild $(SRPM)
 
 qa: tox
