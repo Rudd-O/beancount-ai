@@ -813,7 +813,8 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
                 f"sorry, matches are ambiguous, cannot proceed; list of matches:\n{pprint.pformat(matches)}"
             )
 
-            # Present ranked list to user.
+            # Present ranked list to user.  This is dead code for now, but we will enable it in the future
+            # when more testing has taken place.
             print("\nRanked candidates (select by index):", file=sys.stderr)
             for candidate_match in matches[:5]:  # show top 5
                 print("candidate:", file=sys.stderr)
@@ -1091,7 +1092,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    global _cfg_override
     ap = build_parser()
     args = ap.parse_args()
 
