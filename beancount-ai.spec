@@ -47,7 +47,7 @@ Summary:        %{summary}
 
 
 %check
-%tox
+%{!?disable_tests:%{tox}}%{?disable_tests:true}
 
 
 %files -n python3-%{package_name} -f %{pyproject_files}

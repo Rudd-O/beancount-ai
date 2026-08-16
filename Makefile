@@ -17,4 +17,7 @@ srpm: dist
 rpm: srpm
 	rpmbuild --define '%_rpmdir dist' --rebuild dist/python-beancount-ai-*.src.rpm
 
+rpm-notests: srpm
+	rpmbuild --define '%disable_tests true' --define '%_rpmdir dist' --rebuild dist/python-beancount-ai-*.src.rpm
+
 qa: tox
