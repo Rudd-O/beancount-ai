@@ -24,10 +24,10 @@ A set of programs to help you use AI to import and manage scanned receipts into 
 
 %description %_description
 
-%package -n python3-%{module_name}
+%package -n python3-%{package_name}
 Summary:        %{summary}
 
-%description -n python3-%{module_name} %_description
+%description -n python3-%{package_name} %_description
 
 %prep
 %autosetup -p1 -n %{module_name}-%{version}
@@ -50,7 +50,7 @@ Summary:        %{summary}
 %tox
 
 
-%files -n python3-%{module_name} -f %{pyproject_files}
+%files -n python3-%{package_name} -f %{pyproject_files}
 %{_bindir}/bean-ai
 %{_bindir}/bean-ai-server
 
