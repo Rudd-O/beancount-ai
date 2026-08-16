@@ -11,11 +11,12 @@ As a qrexec service, it reads nothing from stdin and only writes structured resu
 import argparse
 import base64
 import datetime
+from functools import partial
 import json
 import os
 import sys
 from pathlib import Path
-from typing import ClassVar, TypedDict, cast, Literal
+from typing import TypedDict, cast, Literal
 from webdav4.client import Client, ResourceNotFound  # type:ignore
 
 from openai._streaming import Stream
@@ -25,90 +26,14 @@ from openai.types.chat import (
     ChatCompletionContentPartTextParam,
     ChatCompletionMessageParam,
 )
+from .config import Configuration, WebDAVDocumentSourcesConfiguration
 from .pdf import render_pdf_pages_to_png
 
-CONF_DEFAULT = Path.home() / ".config" / "bean-ai.json"
 RECEIPT_CONVERSION_PROMPT_PATH = (
     Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
 )
 RECEIPT_MATCH_PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_MATCH_PROMPT.md"
 RECEIPT_INFO_PROMPT_PATH = Path(__file__).resolve().parent / "RECEIPT_INFO_PROMPT.md"
-
-# -- configuration ---------------------------------------------------------
-
-
-class Configuration:
-    """Configuration loaded from a bean-ai JSON config file.
-
-    Singleton that caches its first loaded instance at the class level.
-    Use :meth:`load` to retrieve or initialise it.
-
-    Attributes:
-        openwebui_url: Base URL of the Open-WebUI instance for receipt processing.
-        openwebui_token: API token for authenticating with the Open-WebUI instance.
-        openwebui_model: Model name to use via the Open-WebUI instance.
-        receipts_username: WebDAV username for the receipts data source.
-        receipts_password: WebDAV password for the receipts data source.
-        receipts_ingestion_url: WebDAV URL where receipt files to be ingested are stored.
-    """
-
-    instance: ClassVar["Configuration | None"] = None
-    cfg_path: ClassVar[Path | None] = None  # which file was actually loaded
-
-    openwebui_url: str
-    openwebui_token: str
-    openwebui_model: str
-
-    # WebDAV data sources and credentials
-    receipts_username: str
-    receipts_password: str
-    receipts_ingestion_url: str
-    receipts_association_url: str
-
-    def __init__(self) -> None:
-        raise NotImplementedError("Use Configuration.load() to obtain an instance")
-
-    @classmethod
-    def _get_cfg_path(cls, override: str | None) -> Path:
-        """Return the config file path, resolving overrides in order of priority.
-
-        Priority (highest → lowest):
-            1. ``--config`` CLI argument
-            2. ``BEAN_AI_CONFIG`` environment variable
-            3. Default ``~/.config/bean-ai.json``
-        """
-        if override:
-            return Path(override)
-        env_cfg = os.environ.get("BEAN_AI_CONFIG")
-        if env_cfg:
-            return Path(env_cfg)
-        return CONF_DEFAULT
-
-    @classmethod
-    def load(cls, override: str | None | None = None) -> "Configuration":
-        """Load and cache the config from the resolved path.
-
-        If called multiple times, only the *first* invocation's resolution is used;
-        subsequent calls return the cached result (prevents a user from accidentally
-        reloading with different paths within one process).
-        """
-        if cls.instance is not None:
-            return cls.instance
-
-        fp = cls._get_cfg_path(override)
-        cls.cfg_path = fp
-        with open(fp) as fh:
-            data = json.load(fh)
-        instance = cls.__new__(cls)
-        instance.openwebui_url = data["openwebui_url"]
-        instance.openwebui_token = data["openwebui_token"]
-        instance.openwebui_model = data["openwebui_model"]
-        instance.receipts_username = data["receipts_username"]
-        instance.receipts_password = data["receipts_password"]
-        instance.receipts_ingestion_url = data["receipts_ingestion_url"]
-        instance.receipts_association_url = data["receipts_association_url"]
-        cls.instance = instance
-        return cls.instance
 
 
 def file_to_image_parts(
@@ -168,28 +93,49 @@ def file_to_image_parts(
 _EXT = frozenset((".jpg", ".jpeg", ".png", ".pdf"))
 
 
+class ItemListing(TypedDict):
+    name: str
+    content_length: int | None
+    modified: datetime.datetime
+
+
+class WebDAVClient:
+    def __init__(
+        self,
+        cfg: WebDAVDocumentSourcesConfiguration,
+        category: Literal["unassociated"] | Literal["uningested"],
+    ):
+        url = (
+            cfg.receipts_ingestion_url()
+            if category == "uningested"
+            else cfg.receipts_association_url()
+        )
+
+        self.client = Client(url, auth=(cfg.username, cfg.password))
+
+    def list(self) -> list[ItemListing]:
+        return cast(list[ItemListing], self.client.ls("/", detail=True))
+
+    def read(self, filename: str) -> bytes:
+        with self.client.open(filename, "rb") as remote_file:
+            return cast(bytes, remote_file.read())
+
+    def remove(self, filename: str) -> None:
+        self.client.remove(filename)
+
+
 def do_list(
     cfg: Configuration,
     category: Literal["unassociated"] | Literal["uningested"],
     args: argparse.Namespace,
 ) -> None:
-    url = (
-        cfg.receipts_ingestion_url
-        if category == "uningested"
-        else cfg.receipts_association_url
-    )
-    username = cfg.receipts_username
-    password = cfg.receipts_password
-
-    client = Client(url, auth=(username, password))
-
-    class ItemListing(TypedDict):
-        name: str
-        content_length: int | None
-        modified: datetime.datetime
+    if isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration):
+        client = WebDAVClient(cfg.documents, category)
+    else:
+        assert 0, "not reached"
 
     try:
-        items = cast(list[ItemListing], client.ls("/", detail=True))
+        items = client.list()
     except Exception as e:
         print(f"error: WebDAV list failed: {e}", file=sys.stderr)
         sys.exit(1)
@@ -256,13 +202,13 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
     from httpx import Client as HttpxClient
     from openwebui_client import OpenWebUIClient
 
-    url = cfg.receipts_ingestion_url
-    username = cfg.receipts_username
-    password = cfg.receipts_password
-
     argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
     fn = os.path.basename(argsfilename)
-    webdav_client = Client(url, auth=(username, password))
+
+    if isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration):
+        webdav_client = WebDAVClient(cfg.documents, "uningested")
+    else:
+        assert 0, "not reached"
 
     receipt_path = f"/{fn}"
 
@@ -271,8 +217,7 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
     prompt_text = RECEIPT_CONVERSION_PROMPT_PATH.read_text()
 
     try:
-        with webdav_client.open(receipt_path, "rb") as remote_file:
-            raw: bytes = cast(bytes, remote_file.read())
+        raw = webdav_client.read(receipt_path)
     except Exception as e:
         print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)
@@ -286,8 +231,8 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
         verify = certifi.where()
 
     client = OpenWebUIClient(
-        api_key=cfg.openwebui_token,
-        base_url=cfg.openwebui_url,
+        api_key=cfg.ai.openwebui_token,
+        base_url=cfg.ai.openwebui_url,
         http_client=HttpxClient(verify=verify),
     )
 
@@ -303,7 +248,7 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
     ]
 
     resp = client.chat.completions.create(
-        model=cfg.openwebui_model,
+        model=cfg.ai.openwebui_model,
         messages=messages,
         stream=True,
     )
@@ -312,24 +257,23 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
 
 
 def do_fetch(cfg: Configuration, args: argparse.Namespace) -> None:
-    urls = [cfg.receipts_ingestion_url, cfg.receipts_association_url]
-    username = cfg.receipts_username
-    password = cfg.receipts_password
-
     fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
 
     print(f"Fetching {fn} from WebDAV receipts URL", file=sys.stderr)
     receipt_path = f"/{fn}"
 
+    if isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration):
+        client_factory = partial(WebDAVClient, cfg.documents)
+    else:
+        assert 0, "not reached"
+
     try:
-        webdav_client = Client(urls[0], auth=(username, password))
-        with webdav_client.open(receipt_path, "rb") as remote_file:
-            raw: bytes = cast(bytes, remote_file.read())
+        webdav_client = client_factory("uningested")
+        raw = webdav_client.read(receipt_path)
     except ResourceNotFound:
         try:
-            webdav_client = Client(urls[1], auth=(username, password))
-            with webdav_client.open(receipt_path, "rb") as remote_file:
-                raw = cast(bytes, remote_file.read())
+            webdav_client = client_factory("unassociated")
+            raw = webdav_client.read(receipt_path)
         except Exception as e:
             print(f"error: cannot read {fn}: {e}", file=sys.stderr)
             sys.exit(1)
@@ -342,21 +286,22 @@ def do_fetch(cfg: Configuration, args: argparse.Namespace) -> None:
 
 
 def do_remove(cfg: Configuration, args: argparse.Namespace) -> None:
-    urls = [cfg.receipts_ingestion_url, cfg.receipts_association_url]
-    username = cfg.receipts_username
-    password = cfg.receipts_password
-
     fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
     receipt_path = f"/{fn}"
 
     print(f"Removing {fn} from WebDAV receipts URL", file=sys.stderr)
 
+    if isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration):
+        client_factory = partial(WebDAVClient, cfg.documents)
+    else:
+        assert 0, "not reached"
+
     try:
-        webdav_client = Client(urls[0], auth=(username, password))
+        webdav_client = client_factory("uningested")
         webdav_client.remove(receipt_path)
     except ResourceNotFound:
         try:
-            webdav_client = Client(urls[1], auth=(username, password))
+            webdav_client = client_factory("unassociated")
             webdav_client.remove(receipt_path)
         except Exception as e:
             print(f"error: cannot remove {fn}: {e}", file=sys.stderr)
@@ -380,21 +325,20 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
     from httpx import Client as HttpxClient
     from openwebui_client import OpenWebUIClient
 
-    url = cfg.receipts_association_url
-    username = cfg.receipts_username
-    password = cfg.receipts_password
-
     argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
     fn = os.path.basename(argsfilename)
-    webdav_client = Client(url, auth=(username, password))
+
+    if isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration):
+        webdav_client = WebDAVClient(cfg.documents, "unassociated")
+    else:
+        assert 0, "not reached"
 
     receipt_path = f"/{fn}"
 
     print(f"Reading {fn} from WebDAV receipts URL", file=sys.stderr)
 
     try:
-        with webdav_client.open(receipt_path, "rb") as remote_file:
-            raw: bytes = cast(bytes, remote_file.read())
+        raw = webdav_client.read(receipt_path)
     except Exception as e:
         print(json.dumps({"error": f"cannot read {fn}: {e}"}))
         sys.exit(1)
@@ -409,8 +353,8 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
         verify = certifi.where()
 
     client = OpenWebUIClient(
-        api_key=cfg.openwebui_token,
-        base_url=cfg.openwebui_url,
+        api_key=cfg.ai.openwebui_token,
+        base_url=cfg.ai.openwebui_url,
         http_client=HttpxClient(verify=verify),
     )
 
@@ -433,7 +377,7 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
     ]
 
     resp = client.chat.completions.create(
-        model=cfg.openwebui_model,
+        model=cfg.ai.openwebui_model,
         messages=messages,
         stream=True,
     )
@@ -462,7 +406,7 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
     messages = [{"role": "user", "content": [text_part, *image_parts]}]
 
     resp = client.chat.completions.create(
-        model=cfg.openwebui_model,
+        model=cfg.ai.openwebui_model,
         messages=messages,
         stream=True,
     )

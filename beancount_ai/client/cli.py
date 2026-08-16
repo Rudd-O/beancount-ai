@@ -13,18 +13,12 @@ import sys
 import tempfile
 from datetime import datetime, date, timedelta
 from pathlib import Path
-from typing import ClassVar, IO, Literal, cast, Any
+from typing import IO, Literal, cast, Any
 import pprint
 
 from colorama import Fore, Style  # type: ignore
-from .report import append_to_report
+from .config import Configuration, BeancountConfiguration
 from .beancount_loader import load_transaction_contexts, MatchResults  # type:ignore
-
-
-CONF_DEFAULT = Path.home() / ".config" / "bean-ai.json"
-
-
-# -- configuration ---------------------------------------------------------
 
 
 def demarkdownify(llm_output: str) -> str:
@@ -34,76 +28,6 @@ def demarkdownify(llm_output: str) -> str:
     if llm_output_lines[-1].startswith("```"):
         llm_output_lines = llm_output_lines[:-1]
     return "".join(llm_output_lines)
-
-
-class Configuration:
-    """Configuration loaded from a bean-ai JSON config file.
-
-    Singleton that caches its first loaded instance at the class level.
-    Use :meth:`load` to retrieve or initialise it.
-
-    Attributes:
-        target_vm: Name of the Qubes VM where bean-ai-server runs (None to spawn locally).
-        beancount_folder: Root directory of the Beancount project.
-        beancount_main_file: Path to the main Beancount ledger file relative to ``beancount_folder``.
-        beancount_transaction_destination_file: Filename to append ingested transactions to.
-    """
-
-    instance: ClassVar["Configuration | None"] = None
-    cfg_path: ClassVar[Path | None] = None  # which file was actually loaded
-    target_vm: str | None
-    beancount_folder: Path
-    beancount_main_file: str
-    beancount_transaction_destination_file: str
-
-    def __init__(self) -> None:
-        raise NotImplementedError("Use Configuration.load() to obtain an instance")
-
-    @classmethod
-    def _get_cfg_path(cls, override: str | None) -> Path:
-        """Return the config file path, resolving overrides in order of priority.
-
-        Priority (highest → lowest):
-            1. ``--config`` CLI argument
-            2. ``BEAN_AI_CONFIG`` environment variable
-            3. Default ``~/.config/bean-ai.json``
-        """
-        if override:
-            return Path(override)
-        env_cfg = os.environ.get("BEAN_AI_CONFIG")
-        if env_cfg:
-            return Path(env_cfg)
-        return CONF_DEFAULT
-
-    @classmethod
-    def load(cls, override: str | None = None) -> "Configuration":
-        """Load and cache the config from the resolved path.
-
-        If called multiple times, only the *first* invocation's resolution is used;
-        subsequent calls return the cached result (prevents a user from accidentally
-        reloading with different paths within one process).
-        """
-        if cls.instance is not None:
-            return cls.instance
-
-        fp = cls._get_cfg_path(override)
-        cls.cfg_path = fp
-        with open(fp) as fh:
-            data = json.load(fh)
-        instance = cls.__new__(cls)
-        instance.target_vm = data["target_vm"]
-        instance.beancount_folder = Path(data["beancount_folder"])
-        instance.beancount_main_file = data["beancount_main_file"]
-        instance.beancount_transaction_destination_file = data[
-            "beancount_transaction_destination_file"
-        ]
-        cls.instance = instance
-        return cls.instance
-
-    def transaction_destination_path(self) -> Path:
-        return self.beancount_folder / os.path.basename(
-            self.beancount_transaction_destination_file
-        )
 
 
 def shorten_fn(folder: str | Path, fn: str):
@@ -429,14 +353,13 @@ class ImportResult:
     receipt_data: bytes
     transaction_text: str
     receipt_destination_path: Path
-    transaction_destination_path: Path
+    ingestion_destination_path: Path
     rollback_size: int | None = None
 
     def __init__(
         self,
         vm: RemoteVM,
-        beancount_folder: Path,
-        transaction_destination_path: Path,
+        beancount: BeancountConfiguration,
         filename: str,
     ) -> None:
         receipt_data = vm.fetch_receipt(filename)
@@ -463,7 +386,7 @@ class ImportResult:
         transdate = datetime.strptime(datestr, "%Y-%m-%d").date()
 
         receipt_path = predict_receipt_destination_path(
-            beancount_folder, transdate, filename, account, reststr
+            beancount.main_folder, transdate, filename, account, reststr
         )
         formatted_tx = insert_document_metadata(
             beancount_transaction, str(receipt_path)
@@ -472,15 +395,15 @@ class ImportResult:
         self.receipt_data = receipt_data
         self.transaction_text = formatted_tx
         self.receipt_destination_path = receipt_path
-        self.transaction_destination_path = transaction_destination_path
+        self.ingestion_destination_path = beancount.ingestion_destination_path
 
     def commit(self) -> None:
-        dest = self.transaction_destination_path
+        dest = self.ingestion_destination_path
         receipt_path = self.receipt_destination_path
 
         # First, write to the transaction ledger.
-        with open(self.transaction_destination_path, "a") as f:
-            self.rollback_size = self.transaction_destination_path.stat().st_size
+        with open(self.ingestion_destination_path, "a") as f:
+            self.rollback_size = self.ingestion_destination_path.stat().st_size
             # no marker line is necessary, the transaction has a link to the document in it.
             # f.write("\n; {} imported by bean-ai.\n".format(args.filename))
             f.write("\n\n" + self.transaction_text.strip() + "\n")
@@ -516,12 +439,12 @@ class ImportResult:
                     file=sys.stderr,
                 )
         try:
-            os.truncate(self.transaction_destination_path, self.rollback_size)
+            os.truncate(self.ingestion_destination_path, self.rollback_size)
             self.rollback_size = None
         except Exception as e:
             eee = e
             print(
-                f"The transaction written to {self.transaction_destination_path} could not be rolled back",
+                f"The transaction written to {self.ingestion_destination_path} could not be rolled back",
                 file=sys.stderr,
             )
 
@@ -591,12 +514,7 @@ def do_import(cfg: Configuration, args: argparse.Namespace) -> None:
 
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
-    result = ImportResult(
-        RemoteVM.from_cfg(cfg),
-        cfg.beancount_folder,
-        cfg.transaction_destination_path(),
-        args.filename,
-    )
+    result = ImportResult(RemoteVM.from_cfg(cfg), cfg.beancount, args.filename)
     result.commit()
 
 
@@ -608,8 +526,6 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
 
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
-    batch_mode: bool = args.batch
-
     vm = RemoteVM.from_cfg(cfg)
     receipts = vm.list_receipts("uningested")
 
@@ -629,69 +545,52 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
     # Used to signal potential non-zero in batch mode.
     retval = 0
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        preview_dir = Path(tmpdir)
+    def do_ingest(receipt: str) -> None:
+        if args.yes:
+            action = "import"
+        elif args.no:
+            action = "draft-import"
+        else:
+            action = "skip"
+            while True:
+                print(f"\nImport '{receipt}'? [y/n/p/q] ", file=sys.stderr, end="")
+                try:
+                    answer = input().strip().lower()
+                except EOFError:
+                    return
 
-        for receipt in receipts:
-            if not batch_mode:
-                action = "skip"
-                while True:
-                    print(f"\nImport '{receipt}'? [y/n/p/q] ", file=sys.stderr, end="")
-                    try:
-                        answer = input().strip().lower()
-                    except EOFError:
-                        return
+                if answer == "q":
+                    return
 
-                    if answer == "q":
-                        return
+                if answer == "p":
+                    _preview_receipt(cfg, receipt, preview_dir)
+                    continue  # re-prompt for the same receipt
 
-                    if answer == "p":
-                        _preview_receipt(cfg, receipt, preview_dir)
-                        continue  # re-prompt for the same receipt
+                if answer == "y":
+                    action = "import"
 
-                    if answer == "y":
-                        action = "import"
+                break  # leave prompt loop after y or n
 
-                    break  # leave prompt loop after y or n
+            if "import" not in action:
+                return  # genuinely skip this receipt
 
-                if action != "import":
-                    continue  # genuinely skip this receipt
+        # Attempt the import.
+        try:
+            imp = ImportResult(vm, cfg.beancount, receipt)
+        except Exception as e:
+            raise Exception(f"Import of {receipt} failed: {e}") from e
 
-            # Attempt the import.
-            try:
-                imp = ImportResult(
-                    vm,
-                    cfg.beancount_folder,
-                    cfg.transaction_destination_path(),
-                    receipt,
-                )
-            except Exception as e:
-                print(f"Import of {receipt} failed: {e}", file=sys.stderr)
-                if batch_mode:  # defer error exit to later
-                    retval = 1
-                    continue
-                else:
-                    sys.exit(1)
-
-            # Commit the successful import.
+        # Commit the successful import.
+        if action == "import":
             try:
                 imp.commit()
             except Exception as e:
-                print(f"Commit of imported {receipt} failed: {e}", file=sys.stderr)
-                if batch_mode:  # defer error exit to later
-                    retval = 1
-                    continue
-                else:
-                    sys.exit(1)
+                raise Exception(f"Commit of imported {receipt} failed: {e}") from e
 
             # Remove from WebDAV only after successful import.
             try:
                 do_remove(cfg, argparse.Namespace(filename=receipt))
             except Exception as e:
-                print(
-                    f"Could not remove {receipt} from WebDAV: {e}",
-                    file=sys.stderr,
-                )
                 try:
                     # At this point, we have the transaction written and the receipt
                     # saved locally, but the receipt could not be deleted remotely,
@@ -700,15 +599,25 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
                     # receipt later.
                     imp.rollback()
                 except Exception as ee:
-                    print(
-                        f"Could not roll back transaction of imported {receipt}: {ee}",
-                        file=sys.stderr,
-                    )
-                if batch_mode:
-                    retval = 1  # defer error exit to later
+                    raise Exception(
+                        f"Could not roll back transaction of imported {receipt}: {ee}"
+                    ) from ee
+                raise Exception(f"Could not remove {receipt} from WebDAV: {e}") from e
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        preview_dir = Path(tmpdir)
+
+        for receipt in receipts:
+            ee = None
+            try:
+                do_ingest(receipt)
+            except Exception as e:
+                ee = e
+                if args.yes or args.no:
                     continue
-                else:
-                    sys.exit(1)
+                raise
+            if ee is not None:
+                raise ee
 
     sys.exit(retval)
 
@@ -722,7 +631,11 @@ def do_organize(cfg: Configuration, args: argparse.Namespace) -> None:
     """
     tdate = datetime.strptime(args.date, "%Y-%m-%d").date()
     receipt_path = organize_receipt(
-        cfg.beancount_folder, RemoteVM.from_cfg(cfg), tdate, args.filename, args.account
+        cfg.beancount.main_folder,
+        RemoteVM.from_cfg(cfg),
+        tdate,
+        args.filename,
+        args.account,
     )
     print("The file has been organized into", str(receipt_path), file=sys.stderr)
 
@@ -772,265 +685,270 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
       6. Organize the receipt file.
     """
     vm = RemoteVM.from_cfg(cfg)
+    receipts = vm.list_receipts("unassociated")
 
-    # Step 1: Process the receipt via LLM (existing flow).
-    try:
-        cmd, proc, stdin, stdout = vm.help_associate_receipt(args.filename)
-    except subprocess.CalledProcessError as e:
-        print(f"Error processing receipt: {e}", file=sys.stderr)
-        sys.exit(1)
+    if args.filename:
+        for fn in args.filename:
+            if fn not in receipts:
+                print(f"Receipt {fn} does not exist on server.", file=sys.stderr)
+                sys.exit(1)
+        # All specified receipts exist on the server.  Let's override
+        # the list with what the user sent us.
+        receipts = args.filename
 
-    llm_output = demarkdownify(stream_reasoning_and_capture_output(stdout))
+    if not receipts:
+        print("No receipts to associate.", file=sys.stderr)
+        return
 
-    receipt_info = load_json(llm_output)
+    def associate_one(receipt: str) -> None:
+        # Step 1: Process the receipt via LLM (existing flow).
+        try:
+            cmd, proc, stdin, stdout = vm.help_associate_receipt(receipt)
+        except subprocess.CalledProcessError as e:
+            raise Exception(f"Error processing receipt: {e}") from e
 
-    try:
-        receipt_date = datetime.strptime(receipt_info["date"], "%Y-%m-%d").date()
-    except KeyError:
-        receipt_date = None
-    try:
-        amt_cur = cast(str, receipt_info["amount"])
-    except KeyError:
-        amt_cur = None
+        llm_output = demarkdownify(stream_reasoning_and_capture_output(stdout))
 
-    if receipt_date:
-        print(f"Receipt date: {receipt_date.isoformat()}", file=sys.stderr)
-    else:
-        print("No date in receipt", file=sys.stderr)
-    if amt_cur:
-        print(f"Receipt amount: {amt_cur}", file=sys.stderr)
-
-    # Step 2: Get candidates from Beancount.
-    main_file = cfg.beancount_folder / cfg.beancount_main_file
-    if receipt_date:
-        start_date = receipt_date - timedelta(days=1)
-        end_date = receipt_date + timedelta(
-            days=45
-        )  # 45 days ought to be good for receipts paid up to a month later
+        receipt_info = load_json(llm_output)
 
         try:
-            _, contexts = load_transaction_contexts(
-                str(main_file), start_date, end_date
-            )
-        except Exception as e:
-            print(f"Error loading candidates from Beancount: {e}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        assert 0, "Date for receipt could not be deduced."
+            receipt_date = datetime.strptime(receipt_info["date"], "%Y-%m-%d").date()
+        except KeyError:
+            receipt_date = None
+        try:
+            amt_cur = cast(str, receipt_info["amount"])
+        except KeyError:
+            amt_cur = None
 
-    print(f"Found {len(contexts)} candidate transactions.", file=sys.stderr)
-
-    candidates_data = [
-        ctx.__dict__ if hasattr(ctx, "__dict__") else ctx for ctx in contexts
-    ]
-    # Write candidates JSON to the server.
-    candidates_raw = json.dumps(candidates_data).encode("utf-8")
-    stdin.write(candidates_raw)
-    stdin.flush()
-    stdin.close()
-
-    llm_output = demarkdownify(stream_reasoning_and_capture_output(stdout))
-    stdout.close()
-
-    ret = proc.wait()
-    if ret != 0:
-        raise subprocess.CalledProcessError(ret, cmd)
-
-    resp = cast(MatchResults, load_json(llm_output))
-
-    matches = resp.get("matches", [])
-    if not matches:
-        print("No valid matches found for receipt {args.filename}.", file=sys.stderr)
-        return
-
-    # Step 4 & 5: Interpret results.
-    is_ambiguous = resp.get("ambiguous", False) or (
-        len(matches) > 0 and matches[0].get("score", 0) < 0.8
-    )
-
-    if is_ambiguous:
-        print(
-            "sorry, matches are ambiguous, cannot proceed; list of matches:",
-            file=sys.stderr,
-        )
-        print(pprint.pformat(matches), file=sys.stderr)
-        return
-
-        # Present ranked list to user.
-        print("\nRanked candidates (select by index):", file=sys.stderr)
-        for candidate_match in matches[:5]:  # show top 5
-            print("candidate:", file=sys.stderr)
-            print(pprint.pformat(candidate_match), file=sys.stderr)
-        #     idx = candidate_match["index"]
-        #     score = candidate_match.get("score", 0)
-        #     ctx = contexts[idx]
-
-        #     amount_str = (
-        #         f"{ctx['paid_amount']} {ctx['paid_currency']}"
-        #         if ctx.get("paid_amount")
-        #         else "N/A"
-        #     )
-        #     payee = ctx.get("payee") or "N/A"
-        #     narration = (ctx.get("narration") or "N/A").ljust(30)
-
-        #     print(
-        #         f"  [{idx}] score={score:.2f} {ctx['date_str']}  {str(payee).ljust(25)}  {narration}{amount_str:>15}",
-        #         file=sys.stderr,
-        #     )
-
-        # while True:
-        #     try:
-        #         choice = input("\nSelect candidate (index, or 'r' to retry): ")
-        #         if choice.strip().lower() == "r":
-        #             print(
-        #                 "Retrying...", file=sys.stderr
-        #             )  # TODO: actually reload and re-match
-        #             pass  # stay in loop
-
-        #         selected_idx = int(choice.strip())
-        #         if 0 <= selected_idx < len(contexts):
-        #             is_ambiguous = False
-        #             break
-        #         else:
-        #             print(
-        #                 f"Invalid index. Use [0-{len(contexts) - 1}].", file=sys.stderr
-        #             )
-        #     except (ValueError, EOFError):
-        #         print("Please enter a valid number.", file=sys.stderr)
-        return
-
-    selected_match_index = 0
-    selected_match = matches[selected_match_index]
-
-    selected_txes = [
-        tx
-        for tx in contexts
-        if tx.line_no == selected_match["line_no"]
-        and tx.source_file == selected_match["source_file"]
-    ]
-
-    if len(selected_txes) > 1:
-        print(
-            f"Multiple transactions fit selected transaction match produced by LLM: {selected_match}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    elif not selected_txes:
-        print(
-            f"No transactions fit selected transaction match produced by LLM: {selected_match}",
-            file=sys.stderr,
-        )
-
-    selected_tx = selected_txes[0]
-
-    # # We won't be generating descriptions for now.
-    # description: str | None = None
-    if selected_tx.narration and selected_tx.narration not in ["EFT payment"]:
-        description = selected_tx.narration
-    elif selected_tx.payee:
-        description = selected_tx.payee
-    else:
-        description = None
-
-    if amt_cur:
-        if description is None:
-            description = amt_cur
+        if receipt_date:
+            print(f"Receipt date: {receipt_date.isoformat()}", file=sys.stderr)
         else:
-            description = description + f", {amt_cur}"
+            print("No date in receipt", file=sys.stderr)
+        if amt_cur:
+            print(f"Receipt amount: {amt_cur}", file=sys.stderr)
 
-    # Step 6: Download + organize receipt.
-    receipt_path = predict_receipt_destination_path(
-        cfg.beancount_folder,
-        receipt_date,
-        args.filename,
-        selected_tx.crediting_account,
-        description=description,
-    )
+        # Step 2: Get candidates from Beancount.
+        if receipt_date:
+            start_date = receipt_date - timedelta(days=1)
+            end_date = receipt_date + timedelta(
+                days=45
+            )  # 45 days ought to be good for receipts paid up to a month later
 
-    # Step 7: Update document metadata.
-    tx_file = Path(selected_tx.source_file)
-    line_no = selected_tx.line_no
+            try:
+                _, contexts = load_transaction_contexts(
+                    str(cfg.beancount.main_file), start_date, end_date
+                )
+            except Exception as e:
+                raise Exception(f"Error loading candidates from Beancount: {e}") from e
+        else:
+            assert 0, "Date for receipt could not be deduced."
 
-    if not tx_file.exists():
+        print(f"Found {len(contexts)} candidate transactions.", file=sys.stderr)
+
+        candidates_data = [
+            ctx.__dict__ if hasattr(ctx, "__dict__") else ctx for ctx in contexts
+        ]
+        # Write candidates JSON to the server.
+        candidates_raw = json.dumps(candidates_data).encode("utf-8")
+        stdin.write(candidates_raw)
+        stdin.flush()
+        stdin.close()
+
+        llm_output = demarkdownify(stream_reasoning_and_capture_output(stdout))
+        stdout.close()
+
+        ret = proc.wait()
+        if ret != 0:
+            raise subprocess.CalledProcessError(ret, cmd)
+
+        resp = cast(MatchResults, load_json(llm_output))
+
+        matches = resp.get("matches", [])
+        if not matches:
+            print("No valid matches found for receipt {receipt}.", file=sys.stderr)
+            return
+
+        # Step 4 & 5: Interpret results.
+        is_ambiguous = resp.get("ambiguous", False) or (
+            len(matches) > 0 and matches[0].get("score", 0) < 0.8
+        )
+
+        if is_ambiguous:
+            raise Exception(
+                f"sorry, matches are ambiguous, cannot proceed; list of matches:\n{pprint.pformat(matches)}"
+            )
+
+            # Present ranked list to user.
+            print("\nRanked candidates (select by index):", file=sys.stderr)
+            for candidate_match in matches[:5]:  # show top 5
+                print("candidate:", file=sys.stderr)
+                print(pprint.pformat(candidate_match), file=sys.stderr)
+            #     idx = candidate_match["index"]
+            #     score = candidate_match.get("score", 0)
+            #     ctx = contexts[idx]
+
+            #     amount_str = (
+            #         f"{ctx['paid_amount']} {ctx['paid_currency']}"
+            #         if ctx.get("paid_amount")
+            #         else "N/A"
+            #     )
+            #     payee = ctx.get("payee") or "N/A"
+            #     narration = (ctx.get("narration") or "N/A").ljust(30)
+
+            #     print(
+            #         f"  [{idx}] score={score:.2f} {ctx['date_str']}  {str(payee).ljust(25)}  {narration}{amount_str:>15}",
+            #         file=sys.stderr,
+            #     )
+
+            # while True:
+            #     try:
+            #         choice = input("\nSelect candidate (index, or 'r' to retry): ")
+            #         if choice.strip().lower() == "r":
+            #             print(
+            #                 "Retrying...", file=sys.stderr
+            #             )  # TODO: actually reload and re-match
+            #             pass  # stay in loop
+
+            #         selected_idx = int(choice.strip())
+            #         if 0 <= selected_idx < len(contexts):
+            #             is_ambiguous = False
+            #             break
+            #         else:
+            #             print(
+            #                 f"Invalid index. Use [0-{len(contexts) - 1}].", file=sys.stderr
+            #             )
+            #     except (ValueError, EOFError):
+            #         print("Please enter a valid number.", file=sys.stderr)
+            return
+
+        selected_match_index = 0
+        selected_match = matches[selected_match_index]
+
+        selected_txes = [
+            tx
+            for tx in contexts
+            if tx.line_no == selected_match["line_no"]
+            and tx.source_file == selected_match["source_file"]
+        ]
+
+        if len(selected_txes) > 1:
+            raise Exception(
+                f"Multiple transactions fit selected transaction match produced by LLM: {selected_match}"
+            )
+        elif not selected_txes:
+            raise Exception(
+                f"No transactions fit selected transaction match produced by LLM: {selected_match}"
+            )
+
+        selected_tx = selected_txes[0]
+
+        # # We won't be generating descriptions for now.
+        # description: str | None = None
+        if selected_tx.narration and selected_tx.narration not in ["EFT payment"]:
+            description = selected_tx.narration
+        elif selected_tx.payee:
+            description = selected_tx.payee
+        else:
+            description = None
+
+        if amt_cur:
+            if description is None:
+                description = amt_cur
+            else:
+                description = description + f", {amt_cur}"
+
+        # Step 6: Download + organize receipt.
+        receipt_path = predict_receipt_destination_path(
+            cfg.beancount.main_folder,
+            receipt_date,
+            receipt,
+            selected_tx.crediting_account,
+            description=description,
+        )
+
+        # Step 7: Update document metadata.
+        tx_file = Path(selected_tx.source_file)
+        line_no = selected_tx.line_no
+
+        if not tx_file.exists():
+            raise Exception(
+                f"Warning: Transaction source file '{tx_file}' does not exist. Cannot update metadata."
+            )
+
+        # Read the transaction text and update it.
+        all_lines = tx_file.read_text(encoding="utf-8").splitlines(True)
+
+        if line_no > len(all_lines):
+            raise Exception(
+                f"Error: line number {line_no} exceeds file length ({len(all_lines)})."
+            )
+
+        new_content = update_document_metadata(
+            line_no,
+            all_lines,
+            str(receipt_path),
+        )
+
+        old_lines = all_lines
+        new_lines_txt = (
+            new_content.rstrip("\n") + "\n"
+            if not new_content.endswith("\n")
+            else new_content
+        )
+        new_lines = new_lines_txt.splitlines(True)
+
+        diff = list(
+            difflib.unified_diff(
+                old_lines,
+                new_lines,
+                fromfile=str(tx_file),
+                tofile=str(tx_file),
+                n=5,
+            )
+        )
+        if diff:
+            print("--- Changes ---", file=sys.stdout)
+            for line in diff:
+                sys.stdout.write(line)
+
+        if not args.no and not args.yes:
+            print(f"\nSave changes to '{tx_file}'? [y/n] ", file=sys.stderr, end="")
+            try:
+                answer = input().strip().lower()
+            except EOFError:
+                return
+
+            if answer != "y":
+                return
+
+        if args.no:
+            print(f"Skipping changes to {tx_file} (--no requested)", file=sys.stderr)
+            return
+
+        # Download the receipt and save it organized.
+        raw_bytes = vm.fetch_receipt(receipt)
+        receipt_path.write_bytes(raw_bytes)
+
+        print(f"Receipt saved to {receipt_path}", file=sys.stderr)
+
+        tx_file.write_text(new_content, encoding="utf-8")
         print(
-            f"Warning: Transaction source file '{tx_file}' does not exist. Cannot update metadata.",
-            file=sys.stderr,
+            f"Updated document metadata on line {line_no} of {tx_file}", file=sys.stderr
         )
-        sys.exit(1)
 
-    # Read the transaction text and update it.
-    all_lines = tx_file.read_text(encoding="utf-8").splitlines(True)
+        vm.remove_receipt(receipt)
 
-    if line_no > len(all_lines):
-        print(
-            f"Error: line number {line_no} exceeds file length ({len(all_lines)}).",
-            file=sys.stderr,
-        )
-        return
-
-    new_content = update_document_metadata(
-        line_no,
-        all_lines,
-        str(receipt_path),
-    )
-
-    old_lines = all_lines
-    new_lines_txt = (
-        new_content.rstrip("\n") + "\n"
-        if not new_content.endswith("\n")
-        else new_content
-    )
-    new_lines = new_lines_txt.splitlines(True)
-
-    diff = list(
-        difflib.unified_diff(
-            old_lines,
-            new_lines,
-            fromfile=str(tx_file),
-            tofile=str(tx_file),
-            n=5,
-        )
-    )
-    if diff:
-        print("--- Changes ---", file=sys.stdout)
-        for line in diff:
-            sys.stdout.write(line)
-
-    if not args.no and not args.yes:
-        print(f"\nSave changes to '{tx_file}'? [y/n] ", file=sys.stderr, end="")
+    for receipt in receipts:
+        ee = None
         try:
-            answer = input().strip().lower()
-        except EOFError:
-            return
-
-        if answer != "y":
-            return
-
-    # Save to report.
-    if args.report:
-        with open(args.report, "a+") as reportf:
-            reportf.seek(0, 0)
-            reporttext = reportf.read()
-            reporttext = append_to_report(reporttext, diff)
-            reportf.seek(0, 0)
-            reportf.truncate(0)
-            reportf.write(reporttext)
-            reportf.flush()
-
-    if args.no:
-        print(f"Skipping changes to {tx_file} (--no requested)", file=sys.stderr)
-        return
-
-    # Download the receipt and save it organized.
-    raw_bytes = vm.fetch_receipt(args.filename)
-    receipt_path.write_bytes(raw_bytes)
-
-    print(f"Receipt saved to {receipt_path}", file=sys.stderr)
-
-    tx_file.write_text(new_content, encoding="utf-8")
-    print(f"Updated document metadata on line {line_no} of {tx_file}", file=sys.stderr)
-
-    vm.remove_receipt(args.filename)
+            associate_one(receipt)
+        except Exception as e:
+            ee = e
+            if args.yes or args.no:
+                continue
+            raise
+        if ee is not None:
+            raise ee
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1090,34 +1008,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="One or more receipt filenames (if none are present, all are processed)",
         nargs="*",
     )
-    ing_cmd.add_argument(
-        "--batch",
-        "-b",
-        action="store_true",
-        default=False,
-        dest="batch",
-        help="Non-interactive batch mode: import what it can, skip the rest",
-    )
-
-    assoc_cmd = sp.add_parser(
-        "associate", help="Associate a receipt with an existing Beancount transaction"
-    )
-    assoc_cmd.add_argument(
-        "--html-report",
-        "-r",
-        default=None,
-        dest="report",
-        help="Produce (or append to) an HTML report",
-    )
-    assoc_cmd.add_argument("filename", help="Filename of the receipt")
-    yes_group = assoc_cmd.add_mutually_exclusive_group()
+    yes_group = ing_cmd.add_mutually_exclusive_group()
     yes_group.add_argument(
         "--yes",
         "-y",
         action="store_true",
         default=False,
         dest="yes",
-        help="Confirm all actions automatically (equivalent to answering 'yes' to every prompt)",
+        help="Ingest receipts without confirmation (equivalent to answering 'yes' to every prompt)",
     )
     yes_group.add_argument(
         "--no",
@@ -1125,7 +1023,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         dest="no",
-        help="Deny all actions automatically (equivalent to answering 'no' to every prompt)",
+        help="Do all the work of ingesting a receipt but don't touch any files (equivalent to answering 'no' to every prompt)",
+    )
+
+    assoc_cmd = sp.add_parser(
+        "associate", help="Associate a receipt with an existing Beancount transaction"
+    )
+    assoc_cmd.add_argument(
+        "filename",
+        help="One or more receipt filename (if none are present, all are processed)",
+        nargs="*",
+    )
+    yes_group = assoc_cmd.add_mutually_exclusive_group()
+    yes_group.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        default=False,
+        dest="yes",
+        help="Make changes without confirmation (equivalent to answering 'yes' to every prompt)",
+    )
+    yes_group.add_argument(
+        "--no",
+        "-n",
+        action="store_true",
+        default=False,
+        dest="no",
+        help="Show the changes that would be made but make none (equivalent to answering 'no' to every prompt)",
     )
 
     return ap
