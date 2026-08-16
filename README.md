@@ -72,9 +72,9 @@ Here is a sample configuration file:
     "ingestion_destination_file": "imported.beancount"
   },
   "ai": {
-    "openwebui_url": "https://openwebui.example.com/v1",
-    "openwebui_token": "secret-token",
-    "openwebui_model": "meta-llama/llama-3.1-8b-instruct"
+    "api_url": "https://openwebui.example.com/v1",
+    "token": "secret-token",
+    "model_name": "meta-llama/llama-3.1-8b-instruct"
   },
   "documents": {
     "username": "dav-user",
@@ -90,11 +90,11 @@ Here is a sample configuration file:
 
 | Field | Type | Description |
 |---|---|---|
-| `beancount.main_file` | `Path` | Path to the main Beancount ledger file. |
+| `beancount.main_file` | `Path` | Path to your main Beancount ledger file. |
 | `beancount.ingestion_destination_file` | `Path \| null` | File to append ingested transactions to (relative to `main_file`). Defaults to `main_file` itself. |
-| `ai.openwebui_url` | `str` | Base URL (with `/v1`) of the Open-WebUI instance for receipt processing. |
-| `ai.openwebui_token` | `str` | API token for authenticating with Open-WebUI. |
-| `ai.openwebui_model` | `str` | Model name to use via the Open-WebUI instance. |
+| `ai.api_url` | `str` | Base URL of the OpenAI compatible instance (example for an Open-WebUI instance running on a bare IP: `http://10.240.6.7/api/`). |
+| `ai.token` | `str` | API token for authenticating with the AI API. |
+| `ai.model_name` | `str` | Model name to use with the AI API. |
 | `documents.username` | `str` | WebDAV username for the receipts data source. |
 | `documents.password` | `str` | WebDAV password for the receipts data source. |
 | `documents.base_url` | `str` | Base URL of the WebDAV server containing receipts. |
@@ -136,31 +136,3 @@ The location for configuration can be overridden with command line argument `--c
 1. `--config <path>` CLI flag
 2. `$BEAN_AI_CONFIG` environment variable
 3. Default `~/.config/bean-ai.json`
-
-## CLI Reference
-
-### bean-ai (client)
-
-| Command | Description |
-|---|---|
-| `bean-ai list-unassociated` | Print filenames of receipts not yet linked to a transaction |
-| `bean-ai list-uningested` | Print filenames of receipts not yet imported |
-| `bean-ai import <filename>` | Full import pipeline for a single receipt |
-| `bean-ai ingest [--yes \| --no]` | Interactive or batch ingestion of all uningested receipts |
-| `bean-ai organize <filename> <date> <account>` | File an already-processed receipt into the proper directory |
-| `bean-ai fetch <filename> <destination>` | Download a receipt file to local path |
-| `bean-ai remove <filename>` | Delete a receipt from the server |
-| `bean-ai process <filename>` | Extract transaction data via LLM (prints Beancount tx to stdout) |
-| `bean-ai associate <filename> [--yes \| --no]` | Link a receipt with an existing Beancount transaction |
-
-### bean-ai-server (server VM, for split Qubes OS use)
-
-Runs on the machine with receipts and LLM access. Subcommands accept hex-encoded filenames as positional arguments.
-
-| Command | Description |
-|---|---|
-| `bean-ai-server beanai.ListUningested` | List receipts available for ingestion as JSON |
-| `bean-ai-server beanai.ListUnassociated` | List receipts available for association as JSON |
-| `bean-ai-server beanai.Fetch <hex_filename>` | Fetch a receipt file by filename, raw bytes to stdout |
-| `bean-ai-server beanai.Remove <hex_filename>` | Remove a receipt from WebDAV |
-| `bean-ai-server beanai.Process <hex_filename>` | Process a receipt via LLM, emits JSONL (reasoning + output) |

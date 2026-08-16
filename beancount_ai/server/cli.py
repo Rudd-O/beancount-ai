@@ -231,8 +231,8 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
         verify = certifi.where()
 
     client = OpenWebUIClient(
-        api_key=cfg.ai.openwebui_token,
-        base_url=cfg.ai.openwebui_url,
+        api_key=cfg.ai.token,
+        base_url=cfg.ai.api_url,
         http_client=HttpxClient(verify=verify),
     )
 
@@ -248,7 +248,7 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
     ]
 
     resp = client.chat.completions.create(
-        model=cfg.ai.openwebui_model,
+        model=cfg.ai.model_name,
         messages=messages,
         stream=True,
     )
@@ -317,7 +317,7 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
     """Process a receipt against a list of candidate transactions (passed via stdin).
 
     Reads candidates JSON from stdin; the filename arg comes via hex-encoded CLI.
-    The function loads the receipt image from WebDAV, feeds it to Open-WebUI together
+    The function loads the receipt image from WebDAV, feeds it to LLM together
     with candidate text, and writes structured match results to stdout as plain JSON.
     """
     import ssl
@@ -353,8 +353,8 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
         verify = certifi.where()
 
     client = OpenWebUIClient(
-        api_key=cfg.ai.openwebui_token,
-        base_url=cfg.ai.openwebui_url,
+        api_key=cfg.ai.token,
+        base_url=cfg.ai.api_url,
         http_client=HttpxClient(verify=verify),
     )
 
@@ -377,7 +377,7 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
     ]
 
     resp = client.chat.completions.create(
-        model=cfg.ai.openwebui_model,
+        model=cfg.ai.model_name,
         messages=messages,
         stream=True,
     )
@@ -406,7 +406,7 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
     messages = [{"role": "user", "content": [text_part, *image_parts]}]
 
     resp = client.chat.completions.create(
-        model=cfg.ai.openwebui_model,
+        model=cfg.ai.model_name,
         messages=messages,
         stream=True,
     )
@@ -458,7 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     process_cmd = sp.add_parser(
-        "beanai.Process", help="Process a receipt image via Open-WebUI"
+        "beanai.Process", help="Process a receipt image via LLM"
     )
     process_cmd.add_argument(
         "filename",

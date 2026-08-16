@@ -47,14 +47,14 @@ class AIConfiguration:
     """Configuration for AI backend.
 
     Attributes:
-        openwebui_url: Base URL of the Open-WebUI instance for receipt processing.
-        openwebui_token: API token for authenticating with the Open-WebUI instance.
-        openwebui_model: Model name to use via the Open-WebUI instance.
+        api_url: Base URL of the LLM API instance for receipt processing.
+        token: API token for authenticating with the LLM API instance.
+        model_name: Model name to use via the LLM API instance.
     """
 
-    openwebui_url: str
-    openwebui_token: str
-    openwebui_model: str
+    api_url: str
+    token: str
+    model_name: str
 
 
 class Configuration:
@@ -110,9 +110,9 @@ class Configuration:
             data = json.load(fh)
         instance = cls.__new__(cls)
         instance.ai = AIConfiguration()
-        instance.ai.openwebui_url = data["ai"]["openwebui_url"]
-        instance.ai.openwebui_token = data["ai"]["openwebui_token"]
-        instance.ai.openwebui_model = data["ai"]["openwebui_model"]
+        instance.ai.api_url = data["ai"]["api_url"]
+        instance.ai.token = data["ai"]["token"]
+        instance.ai.model_name = data["ai"]["model_name"]
         instance.documents = WebDAVDocumentSourcesConfiguration()
         instance.documents.username = data["documents"]["username"]
         instance.documents.password = data["documents"]["password"]

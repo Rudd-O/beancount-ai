@@ -74,7 +74,7 @@ Lists filenames ending in `.jpg`, `.jpeg`, `.png`, or `.pdf`, sorted by modifica
 |---|---|---|
 | `bean-ai-server beanai.Fetch <hex_filename>` | hex-encoded filename | Fetch a receipt from WebDAV (tries ingestion URL first, falls back to association) and write raw bytes to stdout. |
 | `bean-ai-server beanai.Remove <hex_filename>` | hex-encoded filename | Remove a receipt file from WebDAV (ingestion URL first, then association). Exit 0 on success, 1 on failure. |
-| `bean-ai-server beanai.Process <hex_filename>` | hex-encoded filename | Process a receipt via Open-WebUI LLM using `RECEIPT_CONVERSION_PROMPT.md`. PDFs are page-by-page rendered to PNG (via `fitz`, 300 DPI fallback). Emits streaming JSONL output. |
+| `bean-ai-server beanai.Process <hex_filename>` | hex-encoded filename | Process a receipt with the LLM using `RECEIPT_CONVERSION_PROMPT.md`. PDFs are page-by-page rendered to PNG (via `fitz`, 300 DPI fallback). Emits streaming JSONL output. |
 | `bean-ai-server beanai.HelpAssociateReceipt <hex_filename>` | hex-encoded filename | Match a receipt against candidate transactions sent via stdin as JSON. Uses `RECEIPT_INFO_PROMPT.md` then `RECEIPT_MATCH_PROMPT.md`. Writes structured match results to stdout. |
 
 ### JSONL output (Process and HelpAssociateReceipt)

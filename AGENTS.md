@@ -26,7 +26,7 @@ You can invoke the tests using command `make qa`.
 
 **bean-ai-server** — runs on the VM that has receipt files + LLM access. CLI subcommands:
 - `bean-ai-server beanai.List -d <receipts-dir>`  lists receipts as JSON
-- `bean-ai-server beanai.Process <filename>`        processes one receipt via Open-WebUI (produces JSONL output)
+- `bean-ai-server beanai.Process <filename>`        processes one receipt via OpenAI-compatible API (produces JSONL output)
 
 **bean-ai** — runs on the VM with Beancount data. CLI subcommands:
 - `bean-ai list`        → prints receipt filenames (one per line)
@@ -41,34 +41,7 @@ Default config: `~/.config/bean-ai.json`. Both clients also support `--config <p
 
 Both programs read from the same config file by default `~/.config/bean-ai.json` (but see below for more).
 
-### Server configuration fields
-
-| Field | Type | Description |
-|---|---|---|
-| `openwebui_url` | `str` | Base URL (with `/v1`) for Open-WebUI REST API |
-| `openwebui_token` | `str` | API key for Open-WebUI authentication |
-| `openwebui_model` | `str` | Model ID to use for the LLM request to Open-WebUI |
-| `receipts_username` | `str` | WebDAV username for the receipts data source |
-| `receipts_password` | `str` | WebDAV password for the receipts data source |
-| `receipts_ingestion_url` | `str` | WebDAV URL where receipt files to be ingested are stored |
-| `receipts_association_url` | `str` | WebDAV URL where receipt files to be associated are stored |
-
-### Client configuration fields
-
-| Field | Type | Description |
-|---|---|---|
-| `target_vm` | `str \| null` | Name of the Qubes VM where bean-ai-server runs. If `null`, client invokes `bean-ai-server` locally via subprocess for local testing support. |
-| `beancount_folder` | `Path` | Root directory of the Beancount project |
-| `beancount_main_file` | `str` | Path to the main Beancount ledger file relative to ``beancount_folder`` |
-| `beancount_transaction_destination_file` | `str` | Filename to append ingested transactions to |
-
-### Configuration resolution order
-
-1. `--config <path>` CLI flag
-2. `$BEAN_AI_CONFIG` env var
-3. Default `~/.config/bean-ai.json`
-
-First match wins; subsequent calls to `Configuration.load()` are cached.
+Refer to `README.md` for configuration details and values.
 
 ## Server-client transport
 
@@ -77,7 +50,7 @@ For security reasons, the software is split into two parts:
 1. The client: runs on the virtual machine dedicated to accounting, where all the
    Beancount files reside.
 2. The server: runs on the virtual machine that has the receipts, and also access
-   to an Open-WebUI LLM API that will process the receipts and turn them into
+   to an OpenAI-compatible LLM API that will process the receipts and turn them into
    Beancount-formatted transactions.
 
 - **Same host** (`target_vm: null`): client spawns server via subprocess, passes hex-encoded subcommand + args.
