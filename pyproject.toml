@@ -7,7 +7,7 @@ name = "beancount-ai"
 version = "0.1.0"
 description = "Help import cash receipts into Beancount via Open-WebUI LLM"
 requires-python = ">=3.14"
-dependencies = ["openwebui-client", "beancount", "colorama", "PyMuPDF"]
+dependencies = ["openwebui-client", "beancount", "colorama", "PyMuPDF", "webdav4", "httpx", "certifi"]
 
 [project.scripts]
 bean-ai-server = "beancount_ai.server.cli:main"
