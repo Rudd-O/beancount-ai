@@ -574,34 +574,6 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
     retval = 0
 
     def do_ingest(receipt: str) -> None:
-        if args.yes:
-            action = "import"
-        elif args.no:
-            action = "draft-import"
-        else:
-            action = "skip"
-            while True:
-                print(f"\nImport '{receipt}'? [y/n/p/q] ", file=sys.stderr, end="")
-                try:
-                    answer = input().strip().lower()
-                except EOFError:
-                    return
-
-                if answer == "q":
-                    return
-
-                if answer == "p":
-                    _preview_receipt(cfg, receipt, preview_dir)
-                    continue  # re-prompt for the same receipt
-
-                if answer == "y":
-                    action = "import"
-
-                break  # leave prompt loop after y or n
-
-            if "import" not in action:
-                return  # genuinely skip this receipt
-
         # Attempt the import.
         try:
             imp = ImportResult(vm, cfg.beancount, receipt)
@@ -614,6 +586,38 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
             print("--- Changes ---", file=sys.stdout)
             for line in diff:
                 sys.stdout.write(line)
+
+        if args.yes:
+            action = "import"
+        elif args.no:
+            action = "draft-import"
+        else:
+            action = "skip"
+            while True:
+                print(
+                    f"\nImport proposed transaction based on '{receipt}'? [y/n/p/q] ",
+                    file=sys.stderr,
+                    end="",
+                )
+                try:
+                    answer = input().strip().lower()
+                except EOFError:
+                    return
+
+                if answer == "q":
+                    sys.exit(0)
+
+                if answer == "p":
+                    _preview_receipt(cfg, receipt, preview_dir)
+                    continue  # re-prompt for the same receipt
+
+                if answer == "y":
+                    action = "import"
+
+                break  # leave prompt loop after y or n
+
+            if "import" not in action:
+                return  # genuinely skip this receipt
 
         # Commit the successful import.
         if action != "import":
@@ -951,11 +955,14 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
                 sys.stdout.write(line)
 
         if not args.no and not args.yes:
-            print(f"\nSave changes to '{tx_file}'? [y/n] ", file=sys.stderr, end="")
+            print(f"\nSave changes to '{tx_file}'? [y/n/q] ", file=sys.stderr, end="")
             try:
                 answer = input().strip().lower()
             except EOFError:
                 return
+
+            if answer == "q":
+                sys.exit(0)
 
             if answer != "y":
                 return
