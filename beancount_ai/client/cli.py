@@ -147,7 +147,10 @@ class RemoteVM:
 
         data = load_json(read_data)
         mm = [os.path.basename(x) for x in data["receipts"]]
-        assert mm == data["receipts"]
+        if mm != data["receipts"]:
+            raise Exception(
+                f"The document store returned non-base paths when listing receipts: {data['receipts']}"
+            )
         return data["receipts"]
 
     def help_associate_receipt(
