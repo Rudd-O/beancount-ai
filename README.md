@@ -1,12 +1,14 @@
-# bean-ai
-
-AI-powered receipt ingestion for [Beancount](https://beancount.github.io/) ledgers.
+# Beancount AI: AI-powered receipt ingestion for [Beancount](https://beancount.github.io/) ledgers
 
 ## Overview
 
-`bean-ai` imports scanned or photographed receipts into a Beancount accounting data set and organizes them coherently. Each receipt is processed by an LLM to extract transaction details, converted into a Beancount transaction, and filed under the appropriate account folder with a `document:` metadata tag linking back to the receipt image.  Receipts for existing transactions can also be imported and associated with the `document:` tag to their corresponding transactions.
+`bean-ai` imports scanned or photographed receipts into a Beancount accounting data set and organizes them coherently. Each receipt is processed by an LLM —local or cloud— to extract transaction details, converted into a Beancount transaction, and filed under the appropriate account folder with a `document:` metadata tag linking back to the receipt image.  Receipts for existing transactions can also be imported and associated with the `document:` tag to their corresponding transactions.
 
-You'll need an OpenAI-compatible LLM (e.g. Open-WebUI / Ollama / OpenAI) and an API key for your service to be able to use this project.  Furthermore, whatever model you use needs to be capable of *vision*.  Additionally, in the current iteration of this project, the receipts storage backend only supports WebDAV -- in a future release, local files will be supported as well.
+This program imposes no dependency on cloud at all.  Furthermore, you do not need a harness like Codex or OpenClaw; you don't need MCP or any similar complication to use `bean-ai` either.  All you need is access to an OpenAI compatible model API, and your computer where you keep Beancount installed.  If you use a local model, you can keep your Beancount and receipt data 100% private.
+
+You'll need an OpenAI-compatible LLM (private like Open-WebUI / Ollama or cloud like OpenAI) and an API key from your LLM service to be able to use this project.  Furthermore, whatever model you use needs to be capable of *vision*.  Additionally, in the current iteration of this project, the receipts storage backend only supports WebDAV -- in a future release, local files will be supported as well.
+
+Bug reports, feature requests and pull requests are welcome!
 
 ## Quick Start
 
