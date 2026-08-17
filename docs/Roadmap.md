@@ -15,7 +15,6 @@ Generated from code review of all Python files under `beancount_ai`.
 ## 2. Configuration robustness
 
 - **Schema validation** — client `Configuration.load()` (`client/config.py:82`) and server `Configuration.load()` (`server/config.py:109`) read arbitrary keys via `json.load(fh)` and access them by bare dict indexing. A typo or missing field silently produces a `KeyError` at runtime. Add either a pydantic model or explicit key sets.
-- **Config singleton reset** — `Configuration.load()` caches at class level (`instance: ClassVar`) with no public reset hook. Testing with multiple configs requires separate processes. Expose `Configuration._reset_instance()` (or similar).
 
 ## 3. Transaction safety
 
@@ -69,3 +68,4 @@ This is a list of things we will not fix.  Do not remove anything from this list
 - **Pagination for large directories** — `Client.ls("/", detail=True)` assumes all receipts fit in one listing. Most WebDAV implementations don't paginate but it's worth protecting against very large directories (thousands of files) by adding a configurable limit + warning to the server-side list handler.
 - **Bean-ai.json client and server config files shared** — Both `bean-ai.json` config schemas share the same file on disk (`~/.config/bean-ai.json`). The server reads its fields first, then the client reads its fields. This is fine and is intended behavior.
 - **Empty `__init__.py` in `beancount_ai/`, `client/`, `server/`** — this program is not a library but a program designed to be consumed via the CLI.
+- **Config singleton reset** — `Configuration.load()` caches at class level (`instance: ClassVar`) with no public reset hook. Testing with multiple configs requires separate processes. Expose `Configuration._reset_instance()` (or similar).  We don't care about configuration resets because the CLI program is a one-shot execution affair.
