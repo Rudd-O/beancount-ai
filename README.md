@@ -6,7 +6,7 @@ AI-powered receipt ingestion for [Beancount](https://beancount.github.io/) ledge
 
 `bean-ai` imports scanned or photographed receipts into a Beancount accounting data set and organizes them coherently. Each receipt is processed by an LLM to extract transaction details, converted into a Beancount transaction, and filed under the appropriate account folder with a `document:` metadata tag linking back to the receipt image.  Receipts for existing transactions can also be imported and associated with the `document:` tag to their corresponding transactions.
 
-You'll need an OpenAI-compatible LLM (e.g. Ollama) to be able to use this project.
+You'll need an OpenAI-compatible LLM (e.g. Open-WebUI / Ollama / OpenAI) and an API key for your service to be able to use this project.  Furthermore, whatever model you use needs to be capable of *vision*.
 
 ## Quick Start
 
@@ -75,7 +75,7 @@ Here is a sample configuration file:
   "ai": {
     "api_url": "https://openwebui.example.com/v1",
     "token": "secret-token",
-    "model_name": "meta-llama/llama-3.1-8b-instruct"
+    "model_name": "qwen3.6:35b-a3b"
   },
   "documents": {
     "username": "dav-user",
@@ -104,7 +104,7 @@ You can append a comment with a space, and a hash sign, and another space to eac
 | `beancount.account_list_file` | `Path` | File containing the list of accounts to be considered to make transactions when ingesting receipts. |
 | `ai.api_url` | `str` | Base URL of the OpenAI compatible instance (example for an Open-WebUI instance running on a bare IP: `http://10.240.6.7/api/`). |
 | `ai.token` | `str` | API token for authenticating with the AI API. |
-| `ai.model_name` | `str` | Model name to use with the AI API. |
+| `ai.model_name` | `str` | Model name to use with the AI API. Must support vision. |
 | `documents.username` | `str` | WebDAV username for the receipts data source. |
 | `documents.password` | `str` | WebDAV password for the receipts data source. |
 | `documents.base_url` | `str` | Base URL of the WebDAV server containing receipts. |
