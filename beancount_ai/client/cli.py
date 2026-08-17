@@ -581,7 +581,7 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
     # Used to signal potential non-zero in batch mode.
     retval = 0
 
-    def do_ingest(receipt: str) -> None:
+    def do_ingest_one(receipt: str, preview_dir: Path) -> None:
         # Attempt the import.
         try:
             imp = ImportResult(vm, cfg.beancount, receipt)
@@ -603,7 +603,7 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
             action = "skip"
             while True:
                 print(
-                    f"\nImport proposed transaction based on '{receipt}'? [y/n/p/q] ",
+                    f"\nImport proposed transaction based on '{receipt}'? [y]es / [n]o / [p]review receipt / [q]uit ",
                     file=sys.stderr,
                     end="",
                 )
@@ -660,7 +660,7 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
         for receipt in receipts:
             ee = None
             try:
-                do_ingest(receipt)
+                do_ingest_one(receipt, preview_dir)
             except Exception as e:
                 ee = e
                 if args.yes or args.no:
@@ -750,7 +750,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
         print("No receipts to associate.", file=sys.stderr)
         return
 
-    def associate_one(receipt: str) -> None:
+    def do_associate_one(receipt: str, preview_dir: Path) -> None:
         # Step 1: Process the receipt via LLM (existing flow).
         try:
             cmd, proc, stdin, stdout = vm.help_associate_receipt(receipt)
@@ -963,17 +963,28 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
                 sys.stdout.write(line)
 
         if not args.no and not args.yes:
-            print(f"\nSave changes to '{tx_file}'? [y/n/q] ", file=sys.stderr, end="")
-            try:
-                answer = input().strip().lower()
-            except EOFError:
-                return
+            while True:
+                print(
+                    f"\nSave proposed changes to '{tx_file}' and import {receipt}? [y]es / [n]o / [p]review receipt / [q]uit ",
+                    file=sys.stderr,
+                    end="",
+                )
+                try:
+                    answer = input().strip().lower()
+                except EOFError:
+                    return
 
-            if answer == "q":
-                sys.exit(0)
+                if answer == "q":
+                    sys.exit(0)
 
-            if answer != "y":
-                return
+                if answer == "p":
+                    _preview_receipt(cfg, receipt, preview_dir)
+                    continue  # re-prompt for the same receipt
+
+                if answer != "y":
+                    return
+
+                break  # leave prompt loop after y or n
 
         if args.no:
             print(f"Skipping changes to {tx_file} (--no requested)", file=sys.stderr)
@@ -992,17 +1003,20 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
 
         vm.remove_receipt(receipt)
 
-    for receipt in receipts:
-        ee = None
-        try:
-            associate_one(receipt)
-        except Exception as e:
-            ee = e
-            if args.yes or args.no:
-                continue
-            raise
-        if ee is not None:
-            raise ee
+    with tempfile.TemporaryDirectory() as tmpdir:
+        preview_dir = Path(tmpdir)
+
+        for receipt in receipts:
+            ee = None
+            try:
+                do_associate_one(receipt, preview_dir)
+            except Exception as e:
+                ee = e
+                if args.yes or args.no:
+                    continue
+                raise
+            if ee is not None:
+                raise ee
 
 
 def build_parser() -> argparse.ArgumentParser:
