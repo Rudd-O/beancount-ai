@@ -52,6 +52,10 @@ The `associate` subcommand is implemented but remains partially incomplete:
 Additionally:
 - **Hard-coded window** — the ±1/+45 day search window in `associate_one` (`client/cli.py:769-773`) is not configurable. For old receipts, users must edit code or wait for a future `--candidate-days` flag.
 
+## 7. User-selectable local file-based receipt backend
+
+This project originally had a local file-based receipt backend but for expediency reasons moved to WebDAV.  A new configuration backend -- and document sources access code -- supporting local files needs to be implemented and wired into the code.
+
 ## 7. General
 
 | Priority | Item |
