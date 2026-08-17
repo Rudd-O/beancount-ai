@@ -538,6 +538,16 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
     print(f"Main account: {account}")
 
 
+def print_diff(diff: list[str]) -> None:
+    print("--- Changes ---", file=sys.stdout)
+    for line in diff:
+        if line.startswith("-"):
+            line = Fore.RED + line + Style.RESET_ALL
+        elif line.startswith("+"):
+            line = Fore.GREEN + line + Style.RESET_ALL
+        sys.stdout.write(line)
+
+
 def do_import(cfg: Configuration, args: argparse.Namespace) -> None:
     """
     Imports a receipt by creating a Beancount transaction for it, copying the document to
@@ -550,9 +560,7 @@ def do_import(cfg: Configuration, args: argparse.Namespace) -> None:
 
     diff = result.diff()
     if diff:
-        print("--- Changes ---", file=sys.stdout)
-        for line in diff:
-            sys.stdout.write(line)
+        print_diff(diff)
 
     result.commit()
 
@@ -591,9 +599,7 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
         # Show a diff.
         diff = imp.diff()
         if diff:
-            print("--- Changes ---", file=sys.stdout)
-            for line in diff:
-                sys.stdout.write(line)
+            print_diff(diff)
 
         if args.yes:
             action = "import"
@@ -965,9 +971,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
             )
         )
         if diff:
-            print("--- Changes ---", file=sys.stdout)
-            for line in diff:
-                sys.stdout.write(line)
+            print_diff(diff)
 
         if not args.no and not args.yes:
             while True:
