@@ -53,6 +53,10 @@ Imported receipts are saved under `<beancount_folder>/<account_with_slashes>/` w
 
 For example, `2026-07-15_Groceries — IMG_1234.jpg`.
 
+### LLMs known to do great work
+
+* qwen3.5:35b-A3B through Ollama / Open-WebUI
+
 ## Configuration
 
 Configuration usually lives in a JSON file: `~/.config/bean-ai.json`
