@@ -17,7 +17,7 @@ import os
 import ssl
 import sys
 from pathlib import Path
-from typing import TypedDict, cast, Literal
+from typing import TypedDict, cast, Literal, IO
 from webdav4.client import Client, ResourceNotFound  # type:ignore
 
 from openai._streaming import Stream
@@ -217,9 +217,28 @@ def stream_reasoning_and_output(resp: Stream[ChatCompletionChunk]):
     sys.stdout.flush()
 
 
+def read_accounts_and_close_stdin(stdin: IO[str]) -> list[str]:
+    # Read accounts list from stdin (the client).
+    try:
+        account_lines = cast(list[str], json.loads(stdin.read()))
+        assert isinstance(account_lines, list)
+        assert all(isinstance(ln, str) for ln in account_lines)
+        for n, acc in enumerate(account_lines):
+            acc = acc.splitlines()[0].strip()
+            account_lines[n] = acc
+        stdin.close()
+    except Exception as e:
+        print(json.dumps({"error": f"invalid account list input: {e}"}))
+        sys.exit(1)
+
+    return account_lines
+
+
 def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
     from httpx import Client as HttpxClient
     from openwebui_client import OpenWebUIClient
+
+    account_lines = read_accounts_and_close_stdin(sys.stdin)
 
     argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
     fn = os.path.basename(argsfilename)
@@ -233,7 +252,9 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
 
     print(f"Reading {fn} from WebDAV receipts URL", file=sys.stderr)
 
+    account_text = json.dumps(account_lines)
     prompt_text = RECEIPT_CONVERSION_PROMPT_PATH.read_text()
+    prompt_text = prompt_text.format(accounts=account_text)
 
     try:
         raw = webdav_client.read(receipt_path)

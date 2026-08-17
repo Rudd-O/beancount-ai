@@ -15,10 +15,13 @@ class BeancountConfiguration:
         ingestion_destination_file: file name (or path relative to the main Beancount file),
                                     to which transactions ingested from receipts will be appended;
                                     if left empty, this will default to your main_file.
+        account_list_file: file name containing a listing of Beancount accounts to consider when
+                           making a transaction during the ingestion process.
     """
 
     main_file: Path
     ingestion_destination_file: Path | None
+    account_list_file: Path
 
     @property
     def ingestion_destination_path(self) -> Path:
@@ -89,5 +92,8 @@ class Configuration:
         if tdf is not None:
             tdf = Path(tdf)
         instance.beancount.ingestion_destination_file = tdf
+        instance.beancount.account_list_file = Path(
+            data["beancount"]["account_list_file"]
+        )
         cls.instance = instance
         return cls.instance

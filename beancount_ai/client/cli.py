@@ -166,12 +166,16 @@ class RemoteVM:
         # FIXME caller of this rawdogs it, but the comms logic should be encapsulated in a class later.
         return cmd, proc, stdin, stdout
 
-    def process_receipt(self, filename: str) -> tuple[str, str]:
+    def process_receipt(
+        self, filename: str, account_list: list[str]
+    ) -> tuple[str, str]:
         """
         Calls upon the LLM on the server side to produce a Beancount transaction
         and the main payment account.
         """
         cmd, proc, stdin, stdout = self._call("beanai.Process", arg=filename)
+        acctlist = json.dumps(account_list).encode("utf-8")
+        stdin.write(acctlist)
         stdin.close()
 
         llm_output = stream_reasoning_and_capture_output(stdout)
@@ -367,7 +371,9 @@ class ImportResult:
     ) -> None:
         receipt_data = vm.fetch_receipt(filename)
 
-        beancount_transaction, account = vm.process_receipt(filename)
+        beancount_transaction, account = vm.process_receipt(
+            filename, beancount.account_list_file.read_text().splitlines()
+        )
         # Strip headline comments and newlines from the transaction.
         while beancount_transaction.lstrip().startswith(";"):
             beancount_transaction = "".join(
@@ -519,7 +525,9 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
     try:
-        llm_output, account = RemoteVM.from_cfg(cfg).process_receipt(args.filename)
+        llm_output, account = RemoteVM.from_cfg(cfg).process_receipt(
+            args.filename, cfg.beancount.account_list_file.read_text().splitlines()
+        )
     except subprocess.CalledProcessError as e:
         sys.exit(e.returncode)
 

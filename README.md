@@ -12,7 +12,7 @@ You'll need an OpenAI-compatible LLM (e.g. Ollama) to be able to use this projec
 
 **Install**: `pip install .` from this repository is the easiest way.  Alternatives include installing in a virtual environment, or [using pre-built Fedora RPMs](https://repo.rudd-o.com/) which deal with the availability of all required dependencies.
 
-**Configure** — create `~/.config/bean-ai.json` (see [Configuration](#configuration) below) for examples.  You'll need a `documents`, an `ai`, and a `beancount` section.
+**Configure** — create `~/.config/bean-ai.json` and `~/.config/bean-ai.accounts` (see [Configuration](#configuration) below) for examples.  You'll need a `documents`, an `ai`, and a `beancount` section.
 
 **Kick the tires**.  To list various kinds of receipts:
 
@@ -69,7 +69,8 @@ Here is a sample configuration file:
 {
   "beancount": {
     "main_file": "/home/user/Documents/Accounting/main.beancount",
-    "ingestion_destination_file": "imported.beancount"
+    "ingestion_destination_file": "imported.beancount",
+    "account_list_file": "/home/user/.config/bean-ai.accounts"
   },
   "ai": {
     "api_url": "https://openwebui.example.com/v1",
@@ -86,12 +87,21 @@ Here is a sample configuration file:
 }
 ```
 
+You also need a `bean-ai.accounts` (customarily saved to `~/.config`) with all your expense, liability and asset accounts used in your day-to-day transactions.  A good starting point to make this listing should be:
+
+```sh
+bean-query Documents/Accounting/00-beancount.bean 'SELECT distinct account ORDER BY account;'
+```
+
+You can append a comment with a space, and a hash sign, and another space to each account, to tune in which circumstances the LLM should consider using that specific account.
+
 ### Parameters
 
 | Field | Type | Description |
 |---|---|---|
 | `beancount.main_file` | `Path` | Path to your main Beancount ledger file. |
 | `beancount.ingestion_destination_file` | `Path \| null` | File to append ingested transactions to (relative to `main_file`). Defaults to `main_file` itself. |
+| `beancount.account_list_file` | `Path` | File containing the list of accounts to be considered to make transactions when ingesting receipts. |
 | `ai.api_url` | `str` | Base URL of the OpenAI compatible instance (example for an Open-WebUI instance running on a bare IP: `http://10.240.6.7/api/`). |
 | `ai.token` | `str` | API token for authenticating with the AI API. |
 | `ai.model_name` | `str` | Model name to use with the AI API. |
@@ -109,7 +119,7 @@ This program supports *split operation* -- receipts and AI access in one VM (the
 
 To enable this mode of operation:
 
-1. Split your configuration so that client VM only has the `beancount` section, and the server VM has the `documents` and `ai` sections.
+1. Split your configuration so that client VM only has the `beancount` section, and the server VM has the `documents` and `ai` sections.  The `bean-ai.accounts` file stays in the client.
 2. Ensure both client and server VMs have this program installed.  Remember there are [pre-built Fedora RPMs](https://repo.rudd-o.com/) of the `python3-beancount-ai` package and all its dependencies.
 3. Deploy the service files in the `qubes-rpc` folder to `/etc/qubes-rpc` of your server VM.  Depending on where `bean-ai-server` is installed, you may have to adjust the paths in those files.  Ensure all service files are executable.  There [pre-built Fedora RPMs](https://repo.rudd-o.com/) named `python3-beancount-ai-qubes-rpc` that will install these files for you.
 4. Add a `target_vm` key in the client configuration, naming the server VM.
@@ -126,7 +136,7 @@ beanai.Remove * financial pim allow
 beanai.HelpAssociateReceipt * financial pim allow
 ```
 
-If you did everything right, `bean-ai list-unassociated` should show you your unassociated receipts.
+If you did everything right, `bean-ai list-unassociated` should show you your unassociated receipts, and everything else will work fine.
 
 ### Overriding configuration
 

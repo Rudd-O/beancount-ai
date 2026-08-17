@@ -38,20 +38,31 @@ The `ingest` command only operates on `uningested` receipts. The `associate` com
 
 The server's `do_process()` handler (in `server/cli.py`) performs a **single LLM pass** using `RECEIPT_CONVERSION_PROMPT.md` (~146 lines):
 
-1. Reads receipt image from WebDAV `uningested` folder via `WebDAVClient`.
-2. Converts PDF receipts to PNG images via `file_to_image_parts()` (reuses PDF→PNG logic).
-3. Sends receipt image + conversion prompt to OpenAI-compatible LLM.
-4. Streams response back to client with reasoning output and final JSON payload.
+1. Reads account list from client via stdin: `read_accounts_and_close_stdin(sys.stdin)` parses JSON array of strings, strips leading/trailing whitespace and comments (lines starting with `;`) from each line, extracts first line via `splitlines()[0]`, and returns the cleaned list.
+2. Loads `RECEIPT_CONVERSION_PROMPT.md` at runtime and injects accounts dynamically: `prompt_text.format(accounts=json.dumps(account_lines))`. The `{accounts}` placeholder in lines 44 of the prompt is replaced with a JSON array of account strings (e.g., `["Assets:Cash:CHF", "Expenses:Food:Groceries"]`).
+3. Reads receipt image from WebDAV `uningested` folder via `WebDAVClient`.
+4. Converts PDF receipts to PNG images via `file_to_image_parts()` (reuses PDF→PNG logic).
+5. Sends receipt image + conversion prompt to OpenAI-compatible LLM.
+6. Streams response back to client with reasoning output and final JSON payload.
 
 The LLM prompt instructs the model to:
 - Extract date (dd.mm.yy format, European), payee, itemized products, payment methods from OCR'd receipt content
-- Assign expense accounts from a provided YAML list of ~90 possible `Expenses:*` categories
-- Assign funding/payment accounts from a 5-account whitelist (`Assets:Cash:CHF`, `Assets:PostFinance:CHF`, etc.)
+- Assign expense accounts from the **client-provided** account list (injected into `{accounts}` placeholder on lines 42-46 of `RECEIPT_CONVERSION_PROMPT.md`)
 - Return JSON with two keys: `transaction` (Beancount-formatted text) and `payment_accounts` (list of debited accounts)
 
 The prompt includes a complete Beancount transaction example showing date format, flag (`!`), payee in double quotes, narration in double quotes, indented posting legs with two-space indent, metadata narration/explanation entries with four-space indent, and negative amounts for payment/income legs.
 
 ## Client-side: `do_ingest()` function
+
+### Configuration: account list file
+
+The `beancount` config section requires `account_list_file: Path`, a file containing all Beancount accounts to consider during receipt ingestion. A common way to generate this file:
+
+```sh
+bean-query Documents/Accounting/00-beancount.bean 'SELECT distinct account ORDER BY account;'
+```
+
+Each line may have an optional `# comment` suffix for tuning LLM behavior per account. The client reads and splits on newlines, keeping the first line of each entry stripped of whitespace.
 
 ### Receipt enumeration
 
@@ -101,7 +112,7 @@ class ImportResult:
 
 Constructor (`__init__`):
 1. `vm.fetch_receipt(filename)` — downloads raw bytes via `beanai.Fetch`
-2. `vm.process_receipt(filename)` — calls `beanai.Process`, streams LLM response, parses JSON for transaction text and payment accounts list
+2. `vm.process_receipt(filename, beancount.account_list_file.read_text().splitlines())` — sends account list as JSON to server via stdin, streams LLM response, parses JSON for transaction text and payment accounts list
 3. Strips headline comment lines (lines starting with `;`) from the start of the transaction
 4. Extracts date string (first field before space) and description (payee + narration after flag, stripped of quotes/semicolons)
 5. Calls `predict_receipt_destination_path()` to compute receipt file path
@@ -268,6 +279,5 @@ The conversion prompt is organized into these sections:
 1. **Introduction** (lines 1-7): Role definition, Beancount format example with inline comments explaining each line
 2. **Extraction instructions** (lines 17-25): What to extract from receipt image — date format, total paid, itemized list, rebates/discounts
 3. **Transaction construction rules** (lines 26-40): How to assemble the transaction — payee, narration, date, expense legs, payment legs, account assignment constraints
-4. **Expense account whitelist** (lines 42-136): ~90 `Expenses:*` categories as YAML list with inline comments for special cases
-5. **Funding account whitelist** (lines 137-144): 5 possible payment/income accounts
-6. **Output format** (embedded throughout): JSON with `transaction` and `payment_accounts` keys
+4. **Account list placeholder** (lines 42-46): `{accounts}` placeholder — filled at runtime by client with JSON array of accounts from `account_list_file`. This replaced the previous hardcoded YAML list of ~90 `Expenses:*` categories. The LLM is instructed to use only these accounts (`"Do not imagine accounts not listed"`).
+5. **Output format** (embedded throughout): JSON with `transaction` and `payment_accounts` keys
