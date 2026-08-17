@@ -41,7 +41,7 @@ Find a reference to all subcommands in the [Commands](docs/Commands.md) document
 
 ### Batch operation
 
-`ingest` and `associate` support flag `--no` which does all the work but never touches your files.  They both also support mode `--yes` as well, which goes ahead and makes all modifications to your Beancount data, importing receipts into your Beancount folder and deleting them from the source.
+`ingest` and `associate` work interactively by default, but they support batch operation too.  They support flag `--no` which does all the work but never touches your files.  They both also support mode `--yes` as well, which goes ahead and makes all modifications to your Beancount data, importing receipts into your Beancount folder and deleting them from the source.  Any exceptions processing receipts when using these two flags are printed (summarized) as they take place, and they are printed in detail at the end of the run; normally (in interactive mode), an exception interrupts the whole process at the first failure.
 
 ### Naming convention for receipt files
 

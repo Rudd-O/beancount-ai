@@ -11,8 +11,11 @@ import os
 import subprocess
 import sys
 import tempfile
+from traceback import print_exception
+from io import StringIO
 from datetime import datetime, date, timedelta
 from pathlib import Path
+from textwrap import indent
 from typing import IO, Literal, cast, Any
 import pprint
 
@@ -578,9 +581,6 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
         print("No receipts to ingest.", file=sys.stderr)
         return
 
-    # Used to signal potential non-zero in batch mode.
-    retval = 0
-
     def do_ingest_one(receipt: str, preview_dir: Path) -> None:
         # Attempt the import.
         try:
@@ -657,19 +657,26 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         preview_dir = Path(tmpdir)
 
+        exceptions: list[tuple[str, Exception]] = []
         for receipt in receipts:
-            ee = None
             try:
                 do_ingest_one(receipt, preview_dir)
             except Exception as e:
-                ee = e
+                exceptions.append((receipt, e))
                 if args.yes or args.no:
-                    continue
-                raise
-            if ee is not None:
-                raise ee
-
-    sys.exit(retval)
+                    print(f"{e} — continuing to next receipt", file=sys.stderr)
+                else:
+                    raise
+        if exceptions:
+            # Can only get here when not in batch mode.
+            print("Summary of errors encountered:", file=sys.stderr)
+            for f, exc in exceptions:
+                print(f"* {f}:", file=sys.stderr)
+                capt = StringIO()
+                print_exception(exc, file=capt)
+                capt.seek(0)
+                print(f"{indent(capt.read(), '    ')}", file=sys.stderr)
+            sys.exit(1)
 
 
 def do_organize(cfg: Configuration, args: argparse.Namespace) -> None:
@@ -1006,17 +1013,26 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         preview_dir = Path(tmpdir)
 
+        exceptions: list[tuple[str, Exception]] = []
         for receipt in receipts:
-            ee = None
             try:
                 do_associate_one(receipt, preview_dir)
             except Exception as e:
-                ee = e
+                exceptions.append((receipt, e))
                 if args.yes or args.no:
-                    continue
-                raise
-            if ee is not None:
-                raise ee
+                    print(f"{e} — continuing to next receipt", file=sys.stderr)
+                else:
+                    raise
+        if exceptions:
+            # Can only get here when not in batch mode.
+            print("Summary of errors encountered:", file=sys.stderr)
+            for f, exc in exceptions:
+                print(f"* {f}:", file=sys.stderr)
+                capt = StringIO()
+                print_exception(exc, file=capt)
+                capt.seek(0)
+                print(f"{indent(capt.read(), '    ')}", file=sys.stderr)
+            sys.exit(1)
 
 
 def build_parser() -> argparse.ArgumentParser:
