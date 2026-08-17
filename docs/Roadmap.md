@@ -29,16 +29,7 @@ Generated from code review of all Python files under `beancount_ai`.
 - **Dedup check before fetch** — both `ImportResult.__init__` (`client/cli.py:368`) and `associate_one` (`client/cli.py:968`) download a receipt via `fetch_receipt` even when it may already exist locally (e.g., after an interrupted ingest). Compare file hashes first.
 - **Prompt injectivity** — the account list is currently dynamically injected to `RECEIPT_CONVERSION_PROMPT.md` on the server side, with an account listing coming from the client side, which is read from a static file on disk. This should be dynamically provided by the client, directly from the Beancount data, in a safe manner to minimize injection risks through the AI payload.  An important question to resolve prior to solving this issue is how do we ensure only certain accounts in the tree are included, and another question is how do we extract user-supplied comments for each account, to support the current use of the account list (which includes an account with an optional `#`-prefixed comment at the end).  Can we supply this information using Beancount account open metadata?  If so, then it's worth doing it.
 
-## 5. PDF rendering enhancements (`pdf.py`)
-
-| Status | Item |
-|---|---|
-| Done (partial) | Minimum DPI floor of 150 is implemented (line 47). Default fallback for pages without embedded images is 300 DPI (line 44). |
-| **TODO** | **`max_dpi` cap** — no upper bound exists. A multi-page high-DPI scan can still render every page at full native resolution, consuming gigabytes of RAM. Add a fixed `max_dpi` constant (e.g., 300) to limit rendering. |
-| **TODO** | **`max_pages` gate** — no page count check exists. A multi-page high-DPI scan should trigger a warning or error if pages exceed a threshold (e.g., 25). Suggest PDF splitting on the server side. |
-| **TODO** | **Resampling** — pages rendered above their natural DPI produce huge base64 payloads that slow down LLM calls and increase costs. Cap rendering resolution using the `max_dpi` constant once implemented. |
-
-## 6. The associate flow (partial feature)
+## 5. The associate flow (partial feature)
 
 The `associate` subcommand is implemented but remains partially incomplete:
 
@@ -52,7 +43,7 @@ The `associate` subcommand is implemented but remains partially incomplete:
 Additionally:
 - **Hard-coded window** — the ±1/+45 day search window in `associate_one` (`client/cli.py:769-773`) is not configurable. For old receipts, users must edit code or wait for a future `--candidate-days` flag.
 
-## 7. User-selectable local file-based receipt backend
+## 6. User-selectable local file-based receipt backend
 
 This project originally had a local file-based receipt backend but for expediency reasons moved to WebDAV.  A new configuration backend -- and document sources access code -- supporting local files needs to be implemented and wired into the code.
 
@@ -63,7 +54,6 @@ This project originally had a local file-based receipt backend but for expedienc
 | High | Beancount file edit safety — backup before edit + atomic write |
 | High | Un-comment / wire up the `associate` ambiguous match picker from the spec |
 | Medium | Config schema validation (missing keys, empty values) |
-| Medium | PDF max DPI cap and max_pages gate (`pdf.py`) |
 | Medium | Fix duplicate SSL verification blocks on the server (see FIXME at `server/cli.py:327`) |
 | Low | Add `--dry-run` mode for all write operations (current `--no` only shows diff, it does not process) |
 | Low | Dedup check before receipt fetch |

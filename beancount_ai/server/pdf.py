@@ -5,6 +5,12 @@ import fitz  # type:ignore
 # Suppress error printouts to stdout — they mess with the JSON LLM output.
 fitz.TOOLS.mupdf_display_errors(False)
 
+# Max DPI for rendering (capped to avoid gigabytes of RAM from high-DPI scans).
+MAX_DPI = 300
+
+# Max pages allowed; PDFs exceeding this raise ValueError.
+MAX_PAGES = 25
+
 
 def render_pdf_pages_to_png(
     pdf_bytes: bytes,
@@ -17,8 +23,20 @@ def render_pdf_pages_to_png(
 
     Falls back to 300 DPI for any page where no embedded image is detected and
     raises any exception ``fitz.open`` may produce for invalid PDF data.
+
+    Raises
+    ------
+    ValueError
+        If the PDF has more than ``MAX_PAGES`` pages.
     """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    if len(doc) > MAX_PAGES:
+        doc.close()
+        raise ValueError(
+            f"PDF has {len(doc)} pages (maximum allowed: {MAX_PAGES}). "
+            "Please split the PDF into smaller files."
+        )
 
     result: list[Tuple[int, float, bytes]] = []
 
@@ -42,9 +60,9 @@ def render_pdf_pages_to_png(
         # default fallback before applying zoom
         if dpi is None:
             dpi = 300
-        # also use a minimum DPI in case of PDFs with no images
-        elif dpi < 150:
-            dpi = 150
+        # clamp to minimum and maximum bounds
+        dpi = max(dpi, 150)
+        dpi = min(dpi, MAX_DPI)
 
         zoom = dpi / 72
         mat = fitz.Matrix(zoom, zoom)
