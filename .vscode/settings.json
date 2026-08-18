@@ -1,3 +1,7 @@
 {
-    "makefile.configureOnOpen": false
+    "makefile.configureOnOpen": false,
+    "ruff.lint.select": [
+        "I",
+        "C",
+    ]
 }

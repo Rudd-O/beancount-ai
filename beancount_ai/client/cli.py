@@ -4,24 +4,25 @@
 Config is read from ~/.config/bean-ai.json.
 """
 
-import difflib
 import argparse
+import difflib
 import json
 import os
+import pprint
 import subprocess
 import sys
 import tempfile
-from traceback import print_exception
+from datetime import date, datetime, timedelta
 from io import StringIO
-from datetime import datetime, date, timedelta
 from pathlib import Path
 from textwrap import indent
-from typing import IO, Literal, cast, Any
-import pprint
+from traceback import print_exception
+from typing import IO, Any, Literal, cast
 
 from colorama import Fore, Style  # type: ignore
-from .config import Configuration, BeancountConfiguration
-from .beancount_loader import load_transaction_contexts, MatchResults  # type:ignore
+
+from .beancount_loader import MatchResults, load_transaction_contexts  # type:ignore
+from .config import BeancountConfiguration, Configuration
 
 
 def demarkdownify(llm_output: str) -> str:
@@ -313,7 +314,7 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
     assert metadata_start < len(tx_lines)
 
     # 1. Keep lines before metadata_start unchanged.
-    result: list[str] = [line for line in tx_lines[:metadata_start]]
+    result: list[str] = list(tx_lines[:metadata_start])
 
     # 2. Scan from metadata_start collecting doc entries; stop at empty line or non-doc.
     pre_indent = re.match(r"^(\s+)", result[-1]) or re.match(r"^(\s+)", "  ")
@@ -565,7 +566,7 @@ def do_import(cfg: Configuration, args: argparse.Namespace) -> None:
     result.commit()
 
 
-def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
+def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
     """
     Processes all known receipts using the following procedure for each receipt:
 
@@ -589,7 +590,7 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:
         print("No receipts to ingest.", file=sys.stderr)
         return
 
-    def do_ingest_one(receipt: str, preview_dir: Path) -> None:
+    def do_ingest_one(receipt: str, preview_dir: Path) -> None:  # noqa: C901
         # Attempt the import.
         try:
             imp = ImportResult(vm, cfg.beancount, receipt)
@@ -736,7 +737,7 @@ def find_transaction_in_file(file_path: Path, transaction_text: str) -> int | No
     return None
 
 
-def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
+def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
     """Associate a receipt with an existing Beancount transaction.
 
     Flow:
@@ -763,7 +764,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:
         print("No receipts to associate.", file=sys.stderr)
         return
 
-    def do_associate_one(receipt: str, preview_dir: Path) -> None:
+    def do_associate_one(receipt: str, preview_dir: Path) -> None:  # noqa: C901
         # Step 1: Process the receipt via LLM (existing flow).
         try:
             cmd, proc, stdin, stdout = vm.help_associate_receipt(receipt)

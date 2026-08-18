@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tests for update_document_metadata."""
 
-import sys
 import pathlib
+import sys
 
 # Ensure parent dir is on path so we can import cli module directly.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))

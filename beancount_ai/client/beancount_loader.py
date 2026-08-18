@@ -12,8 +12,8 @@ import copy
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import TypedDict
-from beancount import loader
 
+from beancount import loader
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -123,7 +123,7 @@ def _find_paying_posting(postings) -> tuple[float | None, str | None, str | None
         return (*pos_amounts[0], None)
 
     sum_amount = round(sum(a for a, _ in pos_amounts), 2)
-    currencies = set(c for _, c in pos_amounts)
+    currencies = {c for _, c in pos_amounts}
     currency = (
         list(currencies)[0]
         if len(currencies) == 1

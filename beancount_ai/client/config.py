@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 from typing import ClassVar
 
-
 CONF_DEFAULT = Path.home() / ".config" / "bean-ai.json"
 
 

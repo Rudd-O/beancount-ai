@@ -11,22 +11,22 @@ As a qrexec service, it reads nothing from stdin and only writes structured resu
 import argparse
 import base64
 import datetime
-from functools import partial
 import json
 import os
 import ssl
 import sys
+from functools import partial
 from pathlib import Path
-from typing import TypedDict, cast, Literal, IO
-from webdav4.client import Client, ResourceNotFound  # type:ignore
+from typing import IO, Literal, TypedDict, cast
 
 from openai._streaming import Stream
 from openai.types.chat import (
-    ChatCompletionContentPartImageParam,
     ChatCompletionChunk,
+    ChatCompletionContentPartImageParam,
     ChatCompletionContentPartTextParam,
     ChatCompletionMessageParam,
 )
+from webdav4.client import Client, ResourceNotFound  # type:ignore
 
 from .config import Configuration, WebDAVDocumentSourcesConfiguration
 from .pdf import render_pdf_pages_to_png
