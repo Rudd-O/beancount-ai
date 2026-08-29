@@ -12,7 +12,7 @@ Bug reports, feature requests and pull requests are welcome!
 
 ## Quick Start
 
-**Install**: `pip install .` from this repository is the easiest way.  Alternatives include installing in a virtual environment, or [using pre-built Fedora RPMs](https://repo.rudd-o.com/) which deal with the availability of all required dependencies.
+**Install**: `pip install .` from this repository is the easiest way.  Alternatives include installing in a virtual environment, or [using pre-built Fedora RPMs](https://repo.rudd-o.com/) which deal with the availability of all required dependencies.  The source contains everything you need to build RPM packages including `rpm` and `deps-fedora` targets, but at least one package isnot in Fedora (`python3-openwebui-client`) and is only available in the link on this paragraph.
 
 **Configure** — create `~/.config/bean-ai.json` and `~/.config/bean-ai.accounts` (see [Configuration](#configuration) below) for examples.  You'll need a `documents`, an `ai`, and a `beancount` section.
 

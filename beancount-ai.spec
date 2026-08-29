@@ -26,6 +26,7 @@ A set of programs to help you use AI to import and manage scanned receipts into 
 
 %package -n python3-%{package_name}
 Summary:        %{summary}
+Requires:       xdg-utils
 
 %description -n python3-%{package_name} %_description
 
