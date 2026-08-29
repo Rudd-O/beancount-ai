@@ -12,7 +12,7 @@ jobs:
   build-and-test-on-fedora:
     name: Build and test on Fedora
     runs-on: ubuntu-24.04
-    container: fedora:latest
+    container: ghcr.io/rudd-o/github-runners/fedora:latest
     steps:
        - run: dnf install -y make
          name: Install make
