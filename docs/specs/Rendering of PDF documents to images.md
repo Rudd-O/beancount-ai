@@ -52,7 +52,7 @@ Only pages whose native DPI exceeds 300 are actually resampled. Pages at or belo
 
 ## Rendering mechanics
 
-The DPI is converted to a zoom factor: `zoom = dpi / 72` (MuPDF works with points internally; 1 point = 1/72 inch). A `fitz.Matrix(zoom, zoom)` transform scales the page during rendering via `page.get_pixmap(matrix=mat)`. The result is exported to PNG with `pix.tobytes("png")`.
+The DPI is converted to a zoom factor: `zoom = dpi / 72` (MuPDF works with points internally; 1 point = 1/72 inch). A `pymupdf.Matrix(zoom, zoom)` transform scales the page during rendering via `page.get_pixmap(matrix=mat)`. The result is exported to PNG with `pix.tobytes("png")`.
 
 ## Safety gates
 
@@ -78,7 +78,7 @@ The gate fires immediately after opening the document, before any page is render
 
 `render_pdf_pages_to_png()` does **not** suppress exceptions it catches internally except by design:
 
-- `fitz.open()` may raise for invalid/corrupt PDF data — these propagate to the caller (handled in `server/cli.py:82` as a JSON `"error"` message and `sys.exit(1)`).
+- `pymupdf.open()` may raise for invalid/corrupt PDF data — these propagate to the caller (handled in `server/cli.py:82` as a JSON `"error"` message and `sys.exit(1)`).
 - `ValueError` from the `max_pages` gate also propagates; it is not caught inside this function.
 
 The caller at `server/cli.py:70-85` wraps all image-part processing in a `try/except Exception` block that catches errors, emits a JSON error line to stdout, and exits with code 1.
