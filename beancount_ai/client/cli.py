@@ -349,7 +349,9 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
         if m_meta:
             j += 1
             continue
-        break
+        # Line doesn't match a known metadata key — likely a posting line.
+        # Scan past it to find document entries that may appear later.
+        j += 1
 
     # Now merge lines from metadata_start..j, skipping doc-entry indices
     # (they are replaced by the new doc block) and keeping non-doc entries.
