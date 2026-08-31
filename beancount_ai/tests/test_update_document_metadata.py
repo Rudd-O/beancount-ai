@@ -116,6 +116,27 @@ def test_document_and_other_tag() -> None:
     assert result == want
 
 
+def test_metadata_replacement_at_end_works() -> None:
+    """One unnumbered `document:` and one numbered — both bumped correctly."""
+    tx_lines = _lines(
+        '2025-01-01 * "Grocery" "Milk"',
+        '  date: "2024-12-31"',
+        "  Exp:Food  10 CHF",
+        '  document: "/old.pdf"',
+    )
+    want = _lines(
+        '2025-01-01 * "Grocery" "Milk"',
+        '  date: "2024-12-31"',
+        "  Exp:Food  10 CHF",
+        '  document: "/newer.jpg"',
+        '  document2: "/old.pdf"',
+    )
+    result = update_document_metadata(
+        line_no=1, tx_lines=tx_lines.splitlines(True), new_doc="/newer.jpg"
+    )
+    assert result == want
+
+
 def test_other_transactions_are_not_fucked() -> None:
     """One unnumbered `document:` and one numbered — both bumped correctly."""
     tx_lines = _lines(
