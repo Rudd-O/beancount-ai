@@ -193,7 +193,7 @@ def do_list_uningested(cfg: Configuration, args: argparse.Namespace) -> None:
     do_list(cfg, "uningested", args)
 
 
-def stream_reasoning_and_output(resp: Stream[ChatCompletionChunk]):
+def stream_reasoning_and_output(resp: Stream[ChatCompletionChunk]) -> None:
     flush_every = 10
     # This will emit one of three types of lines:
     # {"reasoning": "reasoning text chunk"}

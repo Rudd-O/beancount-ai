@@ -34,7 +34,7 @@ def demarkdownify(llm_output: str) -> str:
     return "".join(llm_output_lines)
 
 
-def shorten_fn(folder: str | Path, fn: str):
+def shorten_fn(folder: str | Path, fn: str) -> str:
     """Reduce max path length without affecting the file name extension."""
     maxlen = os.pathconf(folder, "PC_NAME_MAX")
     # Sarn, we only handle UTF-8 file systems.  Maybe this would be good to fix in the future.
@@ -150,12 +150,13 @@ class RemoteVM:
             raise subprocess.CalledProcessError(ret, cmd)
 
         data = load_json(read_data)
-        mm = [os.path.basename(x) for x in data["receipts"]]
-        if mm != data["receipts"]:
+        receipts = cast(list[str], data["receipts"])
+        mm = [os.path.basename(x) for x in receipts]
+        if mm != receipts:
             raise Exception(
                 f"The document store returned non-base paths when listing receipts: {data['receipts']}"
             )
-        return data["receipts"]
+        return receipts
 
     def help_associate_receipt(
         self, filename: str

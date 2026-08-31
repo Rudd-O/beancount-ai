@@ -1,9 +1,9 @@
 from typing import Sequence, Tuple
 
-import fitz  # type:ignore
+import pymupdf
 
 # Suppress error printouts to stdout — they mess with the JSON LLM output.
-fitz.TOOLS.mupdf_display_errors(False)
+pymupdf.TOOLS.mupdf_display_errors(False)  # pyright: ignore[reportUnknownMemberType]
 
 # Max DPI for rendering (capped to avoid gigabytes of RAM from high-DPI scans).
 MAX_DPI = 300
@@ -22,14 +22,14 @@ def render_pdf_pages_to_png(
     highest DPI found on each individual page is used for that page's render.
 
     Falls back to 300 DPI for any page where no embedded image is detected and
-    raises any exception ``fitz.open`` may produce for invalid PDF data.
+    raises any exception ``pymupdf.open`` may produce for invalid PDF data.
 
     Raises
     ------
     ValueError
         If the PDF has more than ``MAX_PAGES`` pages.
     """
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
 
     if len(doc) > MAX_PAGES:
         doc.close()
@@ -65,7 +65,7 @@ def render_pdf_pages_to_png(
         dpi = min(dpi, MAX_DPI)
 
         zoom = dpi / 72
-        mat = fitz.Matrix(zoom, zoom)
+        mat = pymupdf.Matrix(zoom, zoom)
         pix = page.get_pixmap(matrix=mat)
         png_data = pix.tobytes("png")
         result.append((page_idx + 1, float(dpi), png_data))

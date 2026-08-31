@@ -131,7 +131,7 @@ def test_other_transactions_are_not_fucked() -> None:
 # =====================================================================
 
 
-def run_all():
+def run_all() -> int:
     funcs = [v for k, v in list(globals().items()) if k.startswith("test_")]
     fail = False
     for fn in funcs:

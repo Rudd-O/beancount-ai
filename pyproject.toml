@@ -17,8 +17,3 @@ bean-ai = "beancount_ai.client.cli:main"
 
 [tool.setuptools.package-data]
 "beancount_ai" = ["*.md"]
-
-[tool.mypy]
-warn_redundant_casts = true
-warn_unused_ignores = true
-show_error_codes = true

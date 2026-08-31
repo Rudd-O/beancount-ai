@@ -13,7 +13,7 @@ clean:
 tox:
 	tox --current-env
 
-$(SOURCE): qubes-rpc/* beancount_ai/* beancount_ai/*/* MANIFEST.in pyproject.toml tox.ini Makefile docs/* docs/*/*
+$(SOURCE): qubes-rpc/* beancount_ai/* beancount_ai/*/* MANIFEST.in pyproject.toml tox.ini mypy.ini Makefile docs/* docs/*/*
 	python3 -m build
 
 dist: $(SOURCE)
