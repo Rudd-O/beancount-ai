@@ -834,7 +834,7 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa:
 
         matches = resp.get("matches", [])
         if not matches:
-            print("No valid matches found for receipt {receipt}.", file=sys.stderr)
+            print(f"No valid matches found for receipt {receipt}.", file=sys.stderr)
             return
 
         # Step 4 & 5: Interpret results.
