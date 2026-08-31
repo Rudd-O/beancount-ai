@@ -444,7 +444,11 @@ class ImportResult:
         dest = self.ingestion_destination_path
         current = dest.read_text(encoding="utf-8") if dest.exists() else ""
         old_lines = current.splitlines(True) if current else []
-        appended = "\n\n" + self.transaction_text.strip() + "\n"
+        appended = (
+            ("\n" if current.endswith("\n") else "\n\n")
+            + self.transaction_text.strip()
+            + "\n"
+        )
         new_lines = (current + appended).splitlines(True)
         diff = list(
             difflib.unified_diff(
