@@ -20,7 +20,10 @@ beancount-ai/
 ```
 
 Tox (`tox --current-env`) is the test framework, and it runs Ruff, MyPy and pytest.
-You can invoke the tests using command `make qa`.
+You can invoke the entire suite of tests using command `make qa`.  If you are iterating
+through code changes, first run `pytest -vv` in the project directory to verify much more
+quickly which tests are failing.  When those tests are passing, make use of `make qa`
+to catch further problems with the code.
 
 ## How to run
 

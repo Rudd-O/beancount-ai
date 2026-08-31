@@ -9,6 +9,7 @@ import difflib
 import json
 import os
 import pprint
+import re
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,11 @@ from colorama import Fore, Style  # type: ignore
 
 from .beancount_loader import MatchResults, load_transaction_contexts  # type:ignore
 from .config import BeancountConfiguration, Configuration
+
+BEANCOUNT_DOCUMENT_METADATA_KEY_REGEX = re.compile(
+    r"^\s+document(\d+)?:\s*\"?([^\"\n]*)"
+)
+BEANCOUNT_METADATA_KEY_REGEX = re.compile(r"^\s+([a-z][a-zA-Z0-9_-]*):")
 
 
 def demarkdownify(llm_output: str) -> str:
@@ -305,12 +311,15 @@ def insert_document_metadata(transaction_text: str, file_path: str) -> str:
 def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) -> str:
     """Add or replace a document metadata entry after the date line.
 
+    Arguments:
+      line_no: the (zero-based index of the) line containing the first non-date line of the transaction
+      tx_lines: the document contents as a list of lines
+      new_doc: which document to add as a document: tag
+
     The newest doc is always ``document:`` (first in the block).  Any existing
     ``document:`` / ``documentN:`` entries are preserved but renumbered to
     ``document2:``, ``document3:``, … -- old numbering is ignored.
     """
-    import re
-
     metadata_start = line_no  # first index AFTER the date/payee line
     assert metadata_start < len(tx_lines)
 
@@ -327,21 +336,42 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
         ln = tx_lines[j]
         if not ln.strip():  # blank line → stop scanning
             break
-        m = re.match(r"^\s+document(\d+)?:\s*\"?([^\"\n]*)", ln)
-        if not m:  # non-doc metadata line → stop scanning
+        if ln.strip().startswith(";"):  # comment line → stop scanning
             break
-        doc_entries.append((j, m.group(2)))  # captured path value
-        j += 1
+        # Verify if this line matches the Beancount document metadata key.
+        m_doc = BEANCOUNT_DOCUMENT_METADATA_KEY_REGEX.match(ln)
+        if m_doc:
+            doc_entries.append((j, m_doc.group(2)))
+            j += 1
+            continue
+        # Accept any valid Beancount metadata key.
+        m_meta = BEANCOUNT_METADATA_KEY_REGEX.match(ln)
+        if m_meta:
+            j += 1
+            continue
+        break
 
-    # 3. Rebuild the metadata block (newest first).
-    new_lines: list[str] = [f'{pre_str}document: "{new_doc}"\n']
+    # Now merge lines from metadata_start..j, skipping doc-entry indices
+    # (they are replaced by the new doc block) and keeping non-doc entries.
+    doc_indices = {idx for idx, _ in doc_entries}
+
+    # Build the document block (newest first).
+    new_doc_lines: list[str] = [f'{pre_str}document: "{new_doc}"\n']
     for pos, (_, path) in enumerate(doc_entries):
         label = f"document{str(pos + 2)}"  # document2, document3, ...
-        new_lines.append(f'{pre_str}{label}: "{path}"\n')
+        new_doc_lines.append(f'{pre_str}{label}: "{path}"\n')
 
-    result.extend(new_lines)
+    for idx in range(metadata_start, j):
+        line = tx_lines[idx]
+        if not line.strip():
+            break
+        if idx in doc_indices:
+            continue
+        result.append(line)
 
-    # 4. Append remaining lines (everything after the scanned doc block).
+    result.extend(new_doc_lines)
+
+    # Append remaining lines after the scanned block.
     if j < len(tx_lines):
         remaining = list(tx_lines[j:])
         result.extend(remaining)
