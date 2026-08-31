@@ -31,7 +31,7 @@ def test_no_existing_docs() -> None:
     result = update_document_metadata(
         line_no=1, tx_lines=tx_lines.splitlines(True), new_doc="/path/receipt.jpg"
     )
-    assert want == result
+    assert result == want
 
 
 def test_one_existing_document_tag() -> None:
@@ -50,7 +50,7 @@ def test_one_existing_document_tag() -> None:
     result = update_document_metadata(
         line_no=1, tx_lines=tx_lines.splitlines(True), new_doc="/new/receipt.jpg"
     )
-    assert want == result
+    assert result == want
 
 
 def test_multiple_numbered_docs() -> None:
@@ -71,7 +71,7 @@ def test_multiple_numbered_docs() -> None:
     result = update_document_metadata(
         line_no=1, tx_lines=tx_lines.splitlines(True), new_doc="/new.jpg"
     )
-    assert want == result
+    assert result == want
 
 
 def test_mixed_document_and_numbered() -> None:
@@ -92,7 +92,28 @@ def test_mixed_document_and_numbered() -> None:
     result = update_document_metadata(
         line_no=1, tx_lines=tx_lines.splitlines(True), new_doc="/newer.jpg"
     )
-    assert want == result
+    assert result == want
+
+
+def test_document_and_other_tag() -> None:
+    """One unnumbered `document:` and one numbered — both bumped correctly."""
+    tx_lines = _lines(
+        '2025-01-01 * "Grocery" "Milk"',
+        '  date: "2024-12-31"',
+        '  document: "/third.pdf"',
+        "  Exp:Food  10 CHF",
+    )
+    want = _lines(
+        '2025-01-01 * "Grocery" "Milk"',
+        '  date: "2024-12-31"',
+        '  document: "/newer.jpg"',
+        '  document2: "/third.pdf"',
+        "  Exp:Food  10 CHF",
+    )
+    result = update_document_metadata(
+        line_no=1, tx_lines=tx_lines.splitlines(True), new_doc="/newer.jpg"
+    )
+    assert result == want
 
 
 def test_other_transactions_are_not_fucked() -> None:
@@ -125,7 +146,7 @@ def test_other_transactions_are_not_fucked() -> None:
     result = update_document_metadata(
         line_no=4, tx_lines=tx_lines.splitlines(True), new_doc="/newer.jpg"
     )
-    assert want == result
+    assert result == want
 
 
 # =====================================================================
