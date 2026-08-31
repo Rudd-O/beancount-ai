@@ -25,11 +25,6 @@ from colorama import Fore, Style  # type: ignore
 from .beancount_loader import MatchResults, load_transaction_contexts  # type:ignore
 from .config import BeancountConfiguration, Configuration
 
-BEANCOUNT_DOCUMENT_METADATA_KEY_REGEX = re.compile(
-    r"^\s+document(\d+)?:\s*\"?([^\"\n]*)"
-)
-BEANCOUNT_METADATA_KEY_REGEX = re.compile(r"^\s+([a-z][a-zA-Z0-9_-]*):")
-
 
 def demarkdownify(llm_output: str) -> str:
     llm_output_lines = llm_output.splitlines(True)
@@ -313,7 +308,7 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
 
     Arguments:
       line_no: the (zero-based index of the) line containing the first non-date line of the transaction
-      tx_lines: the document contents as a list of lines
+      tx_lines: the document contents as a list of lines (keeping line endings)
       new_doc: which document to add as a document: tag
 
     The newest doc is always ``document:`` (first in the block).  Any existing
@@ -323,14 +318,24 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
     metadata_start = line_no  # first index AFTER the date/payee line
     assert metadata_start < len(tx_lines)
 
-    # 1. Keep lines before metadata_start unchanged.
-    result: list[str] = list(tx_lines[:metadata_start])
+    initial_whitespace_regex = re.compile(r"^(\s+)")
 
     # 2. Scan from metadata_start collecting doc entries; stop at empty line or non-doc.
-    pre_indent = re.match(r"^(\s+)", result[-1]) or re.match(r"^(\s+)", "  ")
-    pre_str = pre_indent.group(1) if pre_indent else "  "
+    pre_indent = initial_whitespace_regex.match(tx_lines[metadata_start])
+    if not pre_indent:
+        raise ValueError(
+            f"supplied line {metadata_start} corresponding to line {tx_lines[metadata_start]} is not part of a transaction"
+        )
+    pre_str = pre_indent.group(1)
 
-    doc_entries: list[tuple[int, str]] = []  # (original_line_index, path)
+    transaction_document_metadata_regex = re.compile(
+        "^" + pre_str + r"document(\d*):(.+)"
+    )
+    transaction_metadata_key_regex = re.compile(
+        "^" + pre_str + r"([a-z][a-zA-Z0-9_-]*):"
+    )
+
+    # Locate transaction contents.
     j = metadata_start
     while j < len(tx_lines):
         ln = tx_lines[j]
@@ -338,47 +343,63 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
             break
         if ln.strip().startswith(";"):  # comment line → stop scanning
             break
-        # Verify if this line matches the Beancount document metadata key.
-        m_doc = BEANCOUNT_DOCUMENT_METADATA_KEY_REGEX.match(ln)
-        if m_doc:
-            doc_entries.append((j, m_doc.group(2)))
-            j += 1
-            continue
         # Accept any valid Beancount metadata key.
-        m_meta = BEANCOUNT_METADATA_KEY_REGEX.match(ln)
+        m_meta = transaction_metadata_key_regex.match(ln)
         if m_meta:
             j += 1
             continue
-        # Line doesn't match a known metadata key — likely a posting line.
-        # Scan past it to find document entries that may appear later.
-        j += 1
-
-    # Now merge lines from metadata_start..j, skipping doc-entry indices
-    # (they are replaced by the new doc block) and keeping non-doc entries.
-    doc_indices = {idx for idx, _ in doc_entries}
-
-    # Build the document block (newest first).
-    new_doc_lines: list[str] = [f'{pre_str}document: "{new_doc}"\n']
-    for pos, (_, path) in enumerate(doc_entries):
-        label = f"document{str(pos + 2)}"  # document2, document3, ...
-        new_doc_lines.append(f'{pre_str}{label}: "{path}"\n')
-
-    for idx in range(metadata_start, j):
-        line = tx_lines[idx]
-        if not line.strip():
+        # Line doesn't match a known metadata key. If it starts with whitespace,
+        # it may be a posting — scan past it. If not, we've left the transaction.
+        if ln.strip() and len(ln) > 0 and ln[0].isspace():
+            j += 1
+        else:
             break
-        if idx in doc_indices:
-            continue
-        result.append(line)
 
-    result.extend(new_doc_lines)
+    # 1. Keep lines before metadata_start unchanged.
+    before: list[str] = list(tx_lines[:metadata_start])
+    # 2. Pick out the transaction we will process.
+    transaction = tx_lines[metadata_start:j]
+    # 3. Keep everything after the transaction intact.
+    after = tx_lines[j:]
 
-    # Append remaining lines after the scanned block.
-    if j < len(tx_lines):
-        remaining = list(tx_lines[j:])
-        result.extend(remaining)
+    # (original_line_index, document number (or empty), metadata value with quotes)
+    doc_entries: list[tuple[int, int, str]] = []
+    insert_position = None
+    for x, ln in enumerate(transaction):
+        # Verify if this line matches the Beancount document metadata key.
+        if m_doc := transaction_document_metadata_regex.match(ln):
+            doc_entries.append(
+                (
+                    x,
+                    1 if "" == m_doc.group(1) else int(m_doc.group(1)),
+                    m_doc.group(2),
+                )
+            )
+            if insert_position is None:
+                insert_position = x
 
-    return "".join(result)
+    if insert_position is None:
+        # First document of the transaction!  Simple insert.
+        transaction.insert(0, pre_str + "document: " + f'"{new_doc}"\n')
+    else:
+        # reserve the "document 1" number for the one I will be inserting soon
+        numbers_taken = {1}
+        for lineno, docnumber, docdata in sorted(
+            doc_entries, key=lambda entry: entry[1]
+        ):
+            # Look for the next highest number available.
+            while docnumber in numbers_taken:
+                docnumber = docnumber + 1
+            transaction[lineno] = (
+                pre_str
+                + f"document{docnumber}:"
+                + docdata
+                + ("" if docdata.endswith("\n") else "\n")
+            )
+            numbers_taken.add(docnumber)
+        transaction.insert(insert_position, pre_str + "document: " + f'"{new_doc}"\n')
+
+    return "".join(before + transaction + after)
 
 
 def _preview_receipt(cfg: Configuration, filename: str, preview_dir: Path) -> None:
