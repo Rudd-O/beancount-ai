@@ -3,6 +3,7 @@
 
 import pathlib
 import sys
+from typing import cast
 
 # Ensure parent dir is on path so we can import cli module directly.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
@@ -166,6 +167,83 @@ def test_other_transactions_are_not_fucked() -> None:
     )
     result = update_document_metadata(
         line_no=4, tx_lines=tx_lines.splitlines(True), new_doc="/newer.jpg"
+    )
+    assert result == want
+
+
+def test_realistic_transactions() -> None:
+    tx: str = """\
+2026-01-15 * "BOUNCE - USEBOUNCE.COM" #madrid-2026
+  date: 2026-01-13
+  document: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-01-13.BOUNCE - USEBOUNCE.COM.pdf"
+  document2: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-08-17.export_credit_cards_overview_XXXXXXXXXXXXXXXX_20260405.csv"
+  Expenses:Current:Travel:Luggage
+  Liabilities:Credit-cards:ZKB   -16.72 CHF
+    raw_string: "BOUNCE - USEBOUNCE.COM   LISBOA PT EUR 17.32 Rate 0.9491721576 of 14.01.2026 CHF 16.45 1.7% Processing surcharge CHF 0.27"
+    processing_surcharge: "CHF 0.27"
+    consumed_string: "BOUNCE - USEBOUNCE.COM   LISBOA PT EUR 17.32 Rate 0.9491721576 of 14.01.2026 CHF 16.45 1.7%"
+  Expenses:Current:Financial:Bank-fees     0.27 CHF
+
+2026-01-16 * "Coop LU"
+  document: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-01-15.Coop LU, 34.80 CHF — Receipt 2026-01-15 11_41_55+00_00.pdf"
+  date: 2026-01-15
+  document2: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-08-17.export_credit_cards_overview_XXXXXXXXXXXXXXXX_20260405.csv"
+  Expenses:Current:Food:Groceries
+  Expenses:Current:Food:Snacks                            4.95 CHF
+  Expenses:Current:Family:Baby:Food                       1.95 +1.30 + 0.55 + 2.80 CHF
+  Expenses:Current:Family:Wife:Groceries                 1.55 CHF
+  Expenses:Current:Family:Wife:Snacks                    3.95 CHF
+  Income:Discounts-and-rebates                           -3.95 CHF
+  Liabilities:Credit-cards:ZKB  -34.8 CHF
+    raw_string: "Coop-5240 ZH PfingstweidsZurich"
+
+2026-01-19 * "digitec Galaxus (Online) Luzern"
+  document: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-01-16.digitec Galaxus (Online) Luzern, 36.30 CHF — galaxus 16.01.26.pdf"
+  date: 2026-01-16
+  document2: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-08-17.export_credit_cards_overview_XXXXXXXXXXXXXXXX_20260405.csv"
+  Expenses:Current:Gifts:Fraga-family
+    narration:"Gifts for aunt"
+  Liabilities:Credit-cards:ZKB      -36.3 CHF
+    raw_string: "digitec Galaxus (Online) Luzern"
+"""
+    want: str = """\
+2026-01-15 * "BOUNCE - USEBOUNCE.COM" #madrid-2026
+  date: 2026-01-13
+  document: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-01-13.BOUNCE - USEBOUNCE.COM.pdf"
+  document2: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-08-17.export_credit_cards_overview_XXXXXXXXXXXXXXXX_20260405.csv"
+  Expenses:Current:Travel:Luggage
+  Liabilities:Credit-cards:ZKB   -16.72 CHF
+    raw_string: "BOUNCE - USEBOUNCE.COM   LISBOA PT EUR 17.32 Rate 0.9491721576 of 14.01.2026 CHF 16.45 1.7% Processing surcharge CHF 0.27"
+    processing_surcharge: "CHF 0.27"
+    consumed_string: "BOUNCE - USEBOUNCE.COM   LISBOA PT EUR 17.32 Rate 0.9491721576 of 14.01.2026 CHF 16.45 1.7%"
+  Expenses:Current:Financial:Bank-fees     0.27 CHF
+
+2026-01-16 * "Coop LU"
+  document: "/bimbambum.jpg"
+  document2: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-01-15.Coop LU, 34.80 CHF — Receipt 2026-01-15 11_41_55+00_00.pdf"
+  date: 2026-01-15
+  document3: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-08-17.export_credit_cards_overview_XXXXXXXXXXXXXXXX_20260405.csv"
+  Expenses:Current:Food:Groceries
+  Expenses:Current:Food:Snacks                            4.95 CHF
+  Expenses:Current:Family:Baby:Food                       1.95 +1.30 + 0.55 + 2.80 CHF
+  Expenses:Current:Family:Wife:Groceries                 1.55 CHF
+  Expenses:Current:Family:Wife:Snacks                    3.95 CHF
+  Income:Discounts-and-rebates                           -3.95 CHF
+  Liabilities:Credit-cards:ZKB  -34.8 CHF
+    raw_string: "Coop-5240 ZH PfingstweidsZurich"
+
+2026-01-19 * "digitec Galaxus (Online) Luzern"
+  document: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-01-16.digitec Galaxus (Online) Luzern, 36.30 CHF — galaxus 16.01.26.pdf"
+  date: 2026-01-16
+  document2: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-08-17.export_credit_cards_overview_XXXXXXXXXXXXXXXX_20260405.csv"
+  Expenses:Current:Gifts:Fraga-family
+    narration:"Gifts for aunt"
+  Liabilities:Credit-cards:ZKB      -36.3 CHF
+    raw_string: "digitec Galaxus (Online) Luzern"
+"""
+    tx_lines = tx.splitlines(True)
+    result = update_document_metadata(
+        line_no=12, tx_lines=tx_lines, new_doc="/bimbambum.jpg"
     )
     assert result == want
 
