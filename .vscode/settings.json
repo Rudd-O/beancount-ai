@@ -3,5 +3,10 @@
     "ruff.lint.select": [
         "I",
         "C",
-    ]
+    ],
+    "python.testing.pytestArgs": [
+        "beancount_ai"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
 }
