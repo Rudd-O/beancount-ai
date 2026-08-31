@@ -308,7 +308,7 @@ def insert_document_metadata(transaction_text: str, file_path: str) -> str:
 
 # Use numbered document keys (document, document2, document3, ...) so each associated
 # receipt gets its own metadata key and the newest one is always just `document:`.
-def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) -> str:
+def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) -> str:  # noqa: C901
     """Add or replace a document metadata entry after the date line.
 
     Arguments:
