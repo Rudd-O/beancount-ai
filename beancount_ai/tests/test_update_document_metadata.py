@@ -3,7 +3,6 @@
 
 import pathlib
 import sys
-from typing import cast
 
 # Ensure parent dir is on path so we can import cli module directly.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
