@@ -464,32 +464,16 @@ class ImportResult:
         self.receipt_destination_path = receipt_path
         self.ingestion_destination_path = beancount.ingestion_destination_path
 
-    def commit(self) -> None:
-        dest = self.ingestion_destination_path
-        receipt_path = self.receipt_destination_path
+    def _formatted_transaction_text(self, lastchar: str) -> str:
+        """
+        Format a transaction based on the last character of the file it will be added to.
 
-        # First, write to the transaction ledger.
-        with open(self.ingestion_destination_path, "a") as f:
-            self.rollback_size = self.ingestion_destination_path.stat().st_size
-            # no marker line is necessary, the transaction has a link to the document in it.
-            # f.write("\n; {} imported by bean-ai.\n".format(args.filename))
-            f.write("\n\n" + self.transaction_text.strip() + "\n")
-            f.flush()
-
-        # Then write the receipt data.
-        try:
-            receipt_path.write_bytes(self.receipt_data)
-        except Exception:
-            print(
-                f"Receipt {receipt_path} could not be saved, rolling back transaction...",
-                file=sys.stderr,
-            )
-            self.rollback()
-            raise
-
-        print(
-            f"The transaction has been imported to {dest} and the receipt has been filed under {receipt_path}",
-            file=sys.stderr,
+        Caller supplies said last character(s).
+        """
+        return (
+            ("\n" if lastchar.endswith("\n") else "\n\n")
+            + self.transaction_text.strip()
+            + "\n"
         )
 
     def diff(self) -> list[str]:
@@ -497,11 +481,7 @@ class ImportResult:
         dest = self.ingestion_destination_path
         current = dest.read_text(encoding="utf-8") if dest.exists() else ""
         old_lines = current.splitlines(True) if current else []
-        appended = (
-            ("\n" if current.endswith("\n") else "\n\n")
-            + self.transaction_text.strip()
-            + "\n"
-        )
+        appended = self._formatted_transaction_text(current)
         new_lines = (current + appended).splitlines(True)
         diff = list(
             difflib.unified_diff(
@@ -514,8 +494,37 @@ class ImportResult:
         )
         return diff
 
+    def commit(self) -> None:
+        dest = self.ingestion_destination_path
+        receipt_path = self.receipt_destination_path
+
+        try:
+            # Write the receipt data.
+            receipt_path.write_bytes(self.receipt_data)
+            print(
+                f"The receipt has been filed under {receipt_path}",
+                file=sys.stderr,
+            )
+
+            with open(self.ingestion_destination_path, "a+") as f:
+                self.rollback_size = self.ingestion_destination_path.stat().st_size
+                # no marker line is necessary, the transaction has a link to the document in it.
+                # f.write("\n; {} imported by bean-ai.\n".format(args.filename))
+                if f.tell() > 0:
+                    f.seek(f.tell() - 1)
+                lastchar = f.read()
+                f.write(self._formatted_transaction_text(lastchar))
+                f.flush()
+
+                print(
+                    f"The transaction has been imported to {dest}",
+                    file=sys.stderr,
+                )
+        except Exception:
+            self.rollback()
+            raise
+
     def rollback(self) -> None:
-        assert self.rollback_size is not None
         eee: Exception | None = None
 
         if self.receipt_destination_path.exists():
@@ -527,15 +536,17 @@ class ImportResult:
                     f"The receipt {self.receipt_destination_path} could not be deleted as part of the transaction rollback",
                     file=sys.stderr,
                 )
-        try:
-            os.truncate(self.ingestion_destination_path, self.rollback_size)
-            self.rollback_size = None
-        except Exception as e:
-            eee = e
-            print(
-                f"The transaction written to {self.ingestion_destination_path} could not be rolled back",
-                file=sys.stderr,
-            )
+
+        if self.rollback_size is not None:
+            try:
+                os.truncate(self.ingestion_destination_path, self.rollback_size)
+                self.rollback_size = None
+            except Exception as e:
+                eee = e
+                print(
+                    f"The transaction written to {self.ingestion_destination_path} could not be rolled back",
+                    file=sys.stderr,
+                )
 
         if eee is not None:
             raise eee
