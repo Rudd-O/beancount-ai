@@ -22,8 +22,11 @@ from typing import IO, Any, Literal, cast
 
 from colorama import Fore, Style  # type: ignore
 
-from .beancount_loader import MatchResults, load_transaction_contexts  # type:ignore
-from .config import BeancountConfiguration, Configuration
+from beancount_ai.client.beancount_loader import (  # type:ignore
+    MatchResults,
+    load_transaction_contexts,
+)
+from beancount_ai.client.config import BeancountConfiguration, Configuration
 
 
 def demarkdownify(llm_output: str) -> str:
@@ -299,6 +302,100 @@ def insert_document_metadata(transaction_text: str, file_path: str) -> str:
     indent = lines[1][: len(lines[1]) - len(stripped)]
     lines.insert(1, '{}document: "{}"\n'.format(indent, file_path.replace('"', '\\"')))
     return "".join(lines)
+
+
+def split_at_transaction_by_line_number(
+    line_no: int, tx_lines: list[str]
+) -> tuple[list[str], list[str], list[str]]:
+    """Take a transaction file and a line number pointer, and split the file.
+
+    Arguments:
+      line_no: the (zero-based index of the) any line part of a transaction
+      tx_lines: the document contents as a list of lines (with line endings if present in the file)
+
+    Returns:
+      A tuple where each item is:
+        0: all the lines belonging to transactions before the identified one
+        1: all the lines belonging to the transaction pointed to by the line number
+        2: all the lines belonging to the transactions after that
+
+    Comments above or below the transaction are not considered part of the transaction in this iteration of the code.
+
+    >>> transes = \"""
+    ... 2026-01-01 * "Beans"
+    ...   Expenses:Beans 1000 CHF
+    ...   Assets:Bank
+    ...
+    ... 2026-01-02 * "More beans"
+    ...   Expenses:Beans 500 CHF
+    ...   Assets:Bank
+    ...
+    ... 2026-01-03 balance Assets:Bank 15400000 CHF
+    ... \""".splitlines(True)
+    >>> split_at_transaction_by_line_number(1, transes)[1]
+    ['2026-01-01 * "Beans"\\n', '  Expenses:Beans 1000 CHF\\n', '  Assets:Bank\\n']
+    >>> split_at_transaction_by_line_number(7, transes)[1]
+    ['2026-01-02 * "More beans"\\n', '  Expenses:Beans 500 CHF\\n', '  Assets:Bank\\n']
+    >>> try: split_at_transaction_by_line_number(8, transes)
+    ... except ValueError: print("nope")
+    nope
+    >>> try: split_at_transaction_by_line_number(9, transes)
+    ... except ValueError: print("nope")
+    nope
+    """
+    tx_start = line_no
+    if tx_start >= len(tx_lines):
+        raise ValueError(
+            f"line number {line_no} cannot be greater than the supplied number of lines"
+        )
+    if tx_start < 0:
+        raise ValueError(f"line number {line_no} cannot be less than zero")
+
+    initial_number_regex = re.compile(r"^[1-9]")
+    initial_whitespace_regex = re.compile(r"^(\s+)")
+
+    # Look at the current line.
+    while tx_start >= 0:
+        ln = tx_lines[tx_start]
+        fields = ln.split()
+        if initial_number_regex.match(ln):
+            if len(fields) > 2 and len(fields[1]) == 1:
+                # Found the start of the transaction.
+                break
+            else:
+                # Starts with a number, but isn't a transaction.
+                raise ValueError(
+                    f"line number {line_no} does not point to a transaction"
+                )
+        elif initial_whitespace_regex.match(ln):
+            if ln.strip():
+                # We may be in the middle of a transaction, because there appears to
+                # be text starting by whitespace.  Look one line back back.
+                tx_start -= 1
+            else:
+                # We found a line containing only whitespace, which indicates we were
+                # not in the middle of a transaction.  It's possible the user had
+                # entered a blank indented line in the middle of a transaction but
+                # either way that is not valid Beancount syntax.
+                raise ValueError(
+                    f"line number {line_no} does not point to a transaction"
+                )
+        else:
+            # The line did not start with a number and a flag, or indented.
+            raise ValueError(f"line number {line_no} does not point to a transaction")
+
+    tx_end = tx_start + 1
+    while tx_end < len(tx_lines):
+        ln = tx_lines[tx_end]
+        if initial_whitespace_regex.match(ln) and ln.strip():
+            # We continue to be in the middle of a transaction.  Look forward.
+            tx_end += 1
+        else:
+            # We found unindented text or a line with only whitespace.
+            # The transaction is over from a Beancount syntax perspective.
+            break
+
+    return tx_lines[:tx_start], tx_lines[tx_start:tx_end], tx_lines[tx_end:]
 
 
 # Use numbered document keys (document, document2, document3, ...) so each associated
