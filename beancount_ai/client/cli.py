@@ -304,7 +304,7 @@ def insert_document_metadata(transaction_text: str, file_path: str) -> str:
     return "".join(lines)
 
 
-def split_at_transaction_by_line_number(
+def split_at_transaction_by_line_number(  # noqa: C901
     line_no: int, tx_lines: list[str]
 ) -> tuple[list[str], list[str], list[str]]:
     """Take a transaction file and a line number pointer, and split the file.
