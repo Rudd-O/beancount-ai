@@ -402,7 +402,7 @@ def split_at_transaction_by_line_number(  # noqa: C901
 
 # Use numbered document keys (document, document2, document3, ...) so each associated
 # receipt gets its own metadata key and the newest one is always just `document:`.
-def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) -> str:  # noqa: C901
+def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) -> str:
     """Add or replace a document metadata entry after the date line.
 
     Arguments:
@@ -414,57 +414,25 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
     ``document:`` / ``documentN:`` entries are preserved but renumbered to
     ``document2:``, ``document3:``, … -- old numbering is ignored.
     """
-    metadata_start = line_no  # first index AFTER the date/payee line
-    assert metadata_start < len(tx_lines)
+    before, transaction, after = split_at_transaction_by_line_number(line_no, tx_lines)
 
     initial_whitespace_regex = re.compile(r"^(\s+)")
 
-    # 2. Scan from metadata_start collecting doc entries; stop at empty line or non-doc.
-    pre_indent = initial_whitespace_regex.match(tx_lines[metadata_start])
-    if not pre_indent:
-        raise ValueError(
-            f"supplied line {metadata_start} corresponding to line {tx_lines[metadata_start]} is not part of a transaction"
-        )
+    pre_indent = initial_whitespace_regex.match(tx_lines[1])
+    assert pre_indent, transaction[1]
     pre_str = pre_indent.group(1)
 
     transaction_document_metadata_regex = re.compile(
         "^" + pre_str + r"document(\d*):(.+)"
     )
-    transaction_metadata_key_regex = re.compile(
-        "^" + pre_str + r"([a-z][a-zA-Z0-9_-]*):"
-    )
-
-    # Locate transaction contents.
-    j = metadata_start
-    while j < len(tx_lines):
-        ln = tx_lines[j]
-        if not ln.strip():  # blank line → stop scanning
-            break
-        if ln.strip().startswith(";"):  # comment line → stop scanning
-            break
-        # Accept any valid Beancount metadata key.
-        m_meta = transaction_metadata_key_regex.match(ln)
-        if m_meta:
-            j += 1
-            continue
-        # Line doesn't match a known metadata key. If it starts with whitespace,
-        # it may be a posting — scan past it. If not, we've left the transaction.
-        if ln.strip() and len(ln) > 0 and ln[0].isspace():
-            j += 1
-        else:
-            break
-
-    # 1. Keep lines before metadata_start unchanged.
-    before: list[str] = list(tx_lines[:metadata_start])
-    # 2. Pick out the transaction we will process.
-    transaction = tx_lines[metadata_start:j]
-    # 3. Keep everything after the transaction intact.
-    after = tx_lines[j:]
 
     # (original_line_index, document number (or empty), metadata value with quotes)
     doc_entries: list[tuple[int, int, str]] = []
     insert_position = None
     for x, ln in enumerate(transaction):
+        if x == 0:
+            # Ignore the first line
+            continue
         # Verify if this line matches the Beancount document metadata key.
         if m_doc := transaction_document_metadata_regex.match(ln):
             doc_entries.append(
@@ -479,7 +447,7 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
 
     if insert_position is None:
         # First document of the transaction!  Simple insert.
-        transaction.insert(0, pre_str + "document: " + f'"{new_doc}"\n')
+        transaction.insert(1, pre_str + "document: " + f'"{new_doc}"\n')
     else:
         # reserve the "document 1" number for the one I will be inserting soon
         numbers_taken = {1}
