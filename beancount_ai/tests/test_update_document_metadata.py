@@ -170,8 +170,12 @@ def test_other_transactions_are_not_fucked() -> None:
     assert result == want
 
 
+def text(s: str) -> str:
+    return s
+
+
 def test_realistic_transactions() -> None:
-    tx: str = """\
+    tx = text("""\
 2026-01-15 * "BOUNCE - USEBOUNCE.COM" #madrid-2026
   date: 2026-01-13
   document: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-01-13.BOUNCE - USEBOUNCE.COM.pdf"
@@ -204,8 +208,8 @@ def test_realistic_transactions() -> None:
     narration:"Gifts for aunt"
   Liabilities:Credit-cards:ZKB      -36.3 CHF
     raw_string: "digitec Galaxus (Online) Luzern"
-"""
-    want: str = """\
+""")
+    want = text("""\
 2026-01-15 * "BOUNCE - USEBOUNCE.COM" #madrid-2026
   date: 2026-01-13
   document: "/home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2026-01-13.BOUNCE - USEBOUNCE.COM.pdf"
@@ -239,7 +243,7 @@ def test_realistic_transactions() -> None:
     narration:"Gifts for aunt"
   Liabilities:Credit-cards:ZKB      -36.3 CHF
     raw_string: "digitec Galaxus (Online) Luzern"
-"""
+""")
     tx_lines = tx.splitlines(True)
     result = update_document_metadata(
         line_no=12, tx_lines=tx_lines, new_doc="/bimbambum.jpg"
