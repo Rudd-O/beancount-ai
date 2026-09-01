@@ -1,0 +1,71 @@
+2023-04-19 open Assets:Bank:ZKB:CHF CHF
+  fava-uptodate-indication: "True"
+2023-08-01 open Assets:Bank:ZKB:CHF:Processing
+2024-12-01 open Assets:Bank:ZKB:USD:Processing
+2030-01-01 balance Assets:Bank:ZKB:CHF:Processing 0 CHF
+2030-01-01 balance Assets:Bank:ZKB:CHF:Processing 0 EUR
+2030-01-01 balance Assets:Bank:ZKB:USD:Processing 0 CHF
+2030-01-01 balance Assets:Bank:ZKB:USD:Processing 0 EUR
+2023-09-14 open Assets:Bank:ZKB:USD USD
+  fava-uptodate-indication: "True"
+2023-04-19 open Liabilities:Credit-cards:ZKB CHF
+  fava-uptodate-indication: "True"
+2026-01-01 open Liabilities:Credit-cards:ZKB:Processing CHF
+2030-01-01 balance Liabilities:Credit-cards:ZKB:Processing 0 CHF
+2025-01-01 open Income:ZKB:Credit-bonus
+
+;; -*- mode: beancount -*-
+**** /home/user/Documents/Accounting/Liabilities/Credit-cards/ZKB/2023-05-25.export_credit_cards_overview_XXXXXXXXXXXXZKBX_20230525.csv
+
+2023-05-08 * "Annual fee credit card"
+  Liabilities:Credit-cards:ZKB  -50.00 CHF
+    consumed_string: "ANNUAL FEE CREDIT CARD"
+    raw_string: "ANNUAL FEE CREDIT CARD"
+  Expenses:Current:Financial:Bank-fees
+
+
+;; -*- mode: beancount -*-
+**** /home/user/Documents/Accounting/Assets/Bank/ZKB/2023-05-25.export_transactions_20230525.csv
+
+2023-05-08 * "JOHN REIMBERG AARGAU" "FINAL SALDO MOVED TO NEW ACCOUNT."
+  Assets:Bank:ZKB:CHF  29.33 CHF
+    comments: "FINAL SALDO MOVED TO NEW ACCOUNT."
+    mailer: "JOHN REIMBERG AARGAU"
+    raw_string: "CREDIT MAILER: JOHN REIMBERG AARGAU"
+    references: "NOTPROVIDED"
+    type: "credit"
+  Assets:Bank:BCGE:CHF
+; This red bull has been accounted for.
+2023-05-11 * "SELECTA AG DUSSELDORF" "Red Bull"
+  Assets:Bank:ZKB:CHF  -3.9 CHF
+    card_number: "XXXX5358"
+    consumed_string: "SELECTA AG DUSSELDORF"
+    purchase_date: "10.05.2023"
+    raw_string: "SALES/SERVICES OF 10.05.2023 CARD NO. XXXX5358 SELECTA AG DUSSELDORF"
+    type: "EFT"
+  Expenses:Current:Food:Snacks
+
+2023-05-25 * "90-17938775 UBS SWITZERLAND AG GRABBLER 8907" "MONATLICH PARKPLATZ 14"
+  Assets:Bank:ZKB:CHF  -250 CHF
+    raw_string: "DEBIT standing_order: 90-17938775 UBS SWITZERLAND AG GRABBLER 8907 sender_s_reference: MONATLICH PARKPLATZ 14"
+    sender_s_reference: "MONATLICH PARKPLATZ 14"
+    standing_order: "90-17938775 UBS SWITZERLAND AG GRABBLER 8907"
+    type: "debit"
+  Expenses:Current:Transportation:Car:Firebird:Parking
+2023-05-25 * "KAUFFMANISCHE KANTONALBANK DOM" "SHIPMENT OF TIRES 444444"
+  Assets:Bank:ZKB:CHF  -96.95 CHF
+    consumed_string: "KAUFFMANISCHE KANTONALBANK  DOM"
+    raw_string: "DEBIT KAUFFMANISCHE KANTONALBANK  DOM sender_s_reference: SHIPMENT OF TIRES 444444"
+    sender_s_reference: "SHIPMENT OF TIRES 444444"
+    type: "debit"
+  Expenses:Current:Mailing:Shipping
+
+2023-05-19 * "SELECTA AG DUSSELDORF" "Red Bull"
+  Assets:Bank:ZKB:CHF  -3.9 CHF
+    card_number: "XXXX5358"
+    consumed_string: "SELECTA AG DUSSELDORF"
+    purchase_date: "18.05.2023"
+    raw_string: "SALES/SERVICES OF 18.05.2023 CARD NO. XXXX5358 SELECTA AG DUSSELDORF"
+    type: "EFT"
+  ; this is a valid comment within a transaction
+  Expenses:Current:Food:Snacks
