@@ -355,7 +355,9 @@ def split_at_transaction_by_line_number(
     initial_whitespace_regex = re.compile(r"^(\s+)")
 
     # Look at the current line.
-    while tx_start >= 0:
+    while True:
+        if tx_start < 0:
+            raise ValueError(f"line number {line_no} does not point to a transaction")
         ln = tx_lines[tx_start]
         fields = ln.split()
         if initial_number_regex.match(ln):
