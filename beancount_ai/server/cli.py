@@ -81,7 +81,7 @@ def file_to_image_parts(
                 page_infos.append((page_num, dpi_used, len(png_bytes)))
         except Exception as e:
             # Report fatal error as a stream message.  Then exit.
-            print(json.dumps({"error": f"PDF rendering failed: {e}"}))
+            print(f"error PDF rendering failed: {e}", file=sys.stderr)
             sys.exit(1)
         for pnum, dpi_used, nbytes in page_infos:
             print(
@@ -228,7 +228,7 @@ def read_accounts_and_close_stdin(stdin: IO[str]) -> list[str]:
             account_lines[n] = acc
         stdin.close()
     except Exception as e:
-        print(json.dumps({"error": f"invalid account list input: {e}"}))
+        print(f"error: invalid account list input: {e}", file=sys.stderr)
         sys.exit(1)
 
     return account_lines
@@ -372,7 +372,7 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
     try:
         raw = webdav_client.read(receipt_path)
     except Exception as e:
-        print(json.dumps({"error": f"cannot read {fn}: {e}"}))
+        print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)
 
     verify = _ssl_verify_path()
@@ -416,7 +416,7 @@ def do_help_associate_receipt(cfg: Configuration, args: argparse.Namespace) -> N
         candidates = json.loads(candidates_raw)
         candidates_text = json.dumps(candidates)
     except Exception as e:
-        print(json.dumps({"error": f"invalid candidate input: {e}"}))
+        print(f"error: invalid candidate input: {e}", file=sys.stderr)
         sys.exit(1)
 
     prompt_text = RECEIPT_MATCH_PROMPT_PATH.read_text().format(

@@ -63,7 +63,7 @@ Runs on the machine with receipts and LLM access. All subcommands accept filenam
 
 | Command | Output on success | Error handling |
 |---|---|---|
-| `bean-ai-server beanai.ListUningested` | JSON: `{"receipts": [...], "count": N}` | Writes `{"error": "..."}` to stderr, exits 1 |
+| `bean-ai-server beanai.ListUningested` | JSON: `{"receipts": [...], "count": N}` | Writes `"error: ..."` to stderr, exits 1 |
 | `bean-ai-server beanai.ListUnassociated` | Same as above | Same as above |
 
 Lists filenames ending in `.jpg`, `.jpeg`, `.png`, or `.pdf`, sorted by modification time. Uses `receipts_ingestion_url` (uningested) or `receipts_association_url` (unassociated).
@@ -85,7 +85,7 @@ Lists filenames ending in `.jpg`, `.jpeg`, `.png`, or `.pdf`, sorted by modifica
 | `{"output": <chunk>}` | Final response content emitted after reasoning completes |
 | `{"finish": <reason>}` | Signals completion (usually `"stop"`); client stops processing and outputs accumulated result |
 
-Each line is flushed immediately. Every 10 chunks the buffer is forcibly flushed to minimize latency over qrexec pipes. On error: writes `{"error": "..."}` to stdout.
+Each line is flushed immediately. Every 10 chunks the buffer is forcibly flushed to minimize latency over qrexec pipes. On error: writes `error: ...` to stderr.
 
 ### HelpAssociateReceipt flow
 
