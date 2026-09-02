@@ -61,14 +61,6 @@ def load_json(s: str | bytes) -> Any:
         raise BadJSON(e.msg, s if isinstance(s, str) else s.decode("utf-8"), e.pos)
 
 
-# -- qrexec transport ------------------------------------------------------
-
-# From inside a VM, IPC to another VM uses:
-#   qrexec-client-vm <target_vm> <action_name> [rpc_client] [args...]
-# Only stdin / stdout are relayed between client and server — the RPC action name
-# determines *which* program on the target VM is invoked (registered via dom0 policy).
-
-
 def stream_reasoning_and_capture_output(stdout: IO[bytes]) -> str:
     accumulated: list[str] = []
 
@@ -76,10 +68,7 @@ def stream_reasoning_and_capture_output(stdout: IO[bytes]) -> str:
     for line in stdout:
         msg = load_json(line)
 
-        if err := msg.get("error"):
-            print(err, file=sys.stderr)
-            break
-        elif msg.get("finish"):
+        if msg.get("finish"):
             break
         elif msg.get("reasoning"):
             sys.stderr.write(Fore.CYAN)
@@ -96,6 +85,14 @@ def stream_reasoning_and_capture_output(stdout: IO[bytes]) -> str:
             assert 0, msg
 
     return "".join(accumulated).strip()
+
+
+# -- qrexec transport ------------------------------------------------------
+
+# From inside a VM, IPC to another VM uses:
+#   qrexec-client-vm <target_vm> <action_name> [rpc_client] [args...]
+# Only stdin / stdout are relayed between client and server — the RPC action name
+# determines *which* program on the target VM is invoked (registered via dom0 policy).
 
 
 class RemoteVM:
@@ -291,6 +288,8 @@ def organize_receipt(
     return receipt_path
 
 
+# FIXME: consider simply using the other function below that does this, so we can delete it.
+# If deleted, update spec docs.
 def insert_document_metadata(transaction_text: str, file_path: str) -> str:
     """
     Takes a Beancount transaction and inserts the `file_path` as a document metadata entry.
