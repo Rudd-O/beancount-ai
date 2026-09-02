@@ -19,7 +19,7 @@ from io import StringIO
 from pathlib import Path
 from textwrap import indent
 from traceback import print_exception
-from typing import IO, Any, Literal, TypedDict, cast
+from typing import IO, Any, Literal, cast
 
 from colorama import Fore, Style  # type: ignore
 
@@ -28,6 +28,7 @@ from beancount_ai.client.beancount_loader import (  # type:ignore
     load_transaction_contexts,
 )
 from beancount_ai.client.config import BeancountConfiguration, Configuration
+from beancount_ai.structs import RefineRequest, RefineRequestDocument
 
 
 def demarkdownify(llm_output: str) -> str:
@@ -171,6 +172,19 @@ class RemoteVM:
             "beanai.HelpAssociateReceipt", arg=filename
         )
         # FIXME caller of this rawdogs it, but the comms logic should be encapsulated in a class later.
+        # FIXME these things should be context managers, actually.  Yield the useful stuff,
+        # then when the context is exited, if the command failed, raise an error.
+        return cmd, proc, stdin, stdout
+
+    def refine(self) -> tuple[list[str], subprocess.Popen[bytes], IO[bytes], IO[bytes]]:
+        """
+        Calls upon the LLM on the server side to produce a Beancount transaction
+        and the main payment account.
+        """
+        cmd, proc, stdin, stdout = self._call("beanai.Refine")
+        # FIXME caller of this rawdogs it, but the comms logic should be encapsulated in a class later.
+        # FIXME these things should be context managers, actually.  Yield the useful stuff,
+        # then when the context is exited, if the command failed, raise an error.
         return cmd, proc, stdin, stdout
 
     def process_receipt(
@@ -472,31 +486,10 @@ def update_document_metadata(line_no: int, tx_lines: list[str], new_doc: str) ->
 def _preview_receipt(cfg: Configuration, filename: str, preview_dir: Path) -> None:
     dest_path = preview_dir / filename
     dest_path.write_bytes(RemoteVM.from_cfg(cfg).fetch_receipt(filename))
-    subprocess.Popen(
-        ["xdg-open", str(dest_path)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    open_document(dest_path)
 
 
 _DOCUMENT_METADATA_REGEX = re.compile(r'^\s*document(\d*):\s*"([^"]+)"')
-
-
-class RefineDocument(TypedDict):
-    """A linked document to send to the server for a refine request."""
-
-    filepath: str
-    data: str  # base64-encoded raw bytes
-
-
-class RefineRequest(TypedDict):
-    """Payload sent to the server's ``beanai.Refine`` subcommand over stdin."""
-
-    transaction_text: str
-    accounts: list[str]
-    documents: list[RefineDocument]
 
 
 def extract_document_paths(tx_block: list[str]) -> list[str]:
@@ -518,35 +511,30 @@ def extract_document_paths(tx_block: list[str]) -> list[str]:
     return paths
 
 
-def resolve_document_path(doc_path: str, tx_file: Path, cfg: Configuration) -> Path:
+def resolve_local_document_path(doc_path: str, tx_file: Path) -> Path:
     """Resolve a ``document:`` value to a client-local path.
 
-    Tries, in order: an absolute path as-is; the path relative to the
-    transaction file's directory; the path relative to the Beancount data root
-    (``main_folder``).  Raises ``FileNotFoundError`` when none exist.
+    Non-absolute paths resolve relative to the document referencing them.
     """
-    p = Path(doc_path)
-    if p.is_absolute():
-        return p
-    for base in (tx_file.parent, cfg.beancount.main_folder):
-        candidate = base / p
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(doc_path)
+    tx_dir = tx_file.parent
+    p = Path(os.path.join(tx_dir, doc_path))
+    return p
 
 
-def _preview_document(
-    doc_path: str, tx_file: Path, cfg: Configuration
-) -> None:
-    """Open a client-local, already-linked document in the user's default viewer."""
-    resolved = resolve_document_path(doc_path, tx_file, cfg)
+def open_document(dest_path: Path) -> None:
     subprocess.Popen(
-        ["xdg-open", str(resolved)],
+        ["xdg-open", str(dest_path)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+
+
+def preview_local_document(doc_path: str, tx_file: Path, cfg: Configuration) -> None:
+    """Open a client-local, already-linked document in the user's default viewer."""
+    resolved = resolve_local_document_path(doc_path, tx_file)
+    open_document(resolved)
 
 
 _TX_HEADER_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2} [*!D]\s")
@@ -602,16 +590,16 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C9
     doc_paths = extract_document_paths(tx_block)
 
     # 4. Collect document contents (client-local, resolved near the tx file).
-    documents_data: list[RefineDocument] = []
+    documents_data: list[RefineRequestDocument] = []
     for doc_path in doc_paths:
+        resolved = resolve_local_document_path(doc_path, tx_file)
         try:
-            resolved = resolve_document_path(doc_path, tx_file, cfg)
+            raw = resolved.read_bytes()
         except FileNotFoundError:
             print(f"Error: linked document not found: {doc_path}", file=sys.stderr)
             sys.exit(1)
-        raw = resolved.read_bytes()
         documents_data.append(
-            RefineDocument(
+            RefineRequestDocument(
                 filepath=doc_path,
                 data=base64.b64encode(raw).decode("ascii"),
             )
@@ -619,11 +607,12 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C9
 
     # 5. Call the server — plain-JSON payload on stdin (no command argument).
     vm = RemoteVM.from_cfg(cfg)
-    cmd, proc, stdin, stdout = vm._call("beanai.Refine")
+    try:
+        cmd, proc, stdin, stdout = vm.refine()
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Error refining receipt: {e}") from e
 
-    accounts = (
-        cfg.beancount.account_list_file.read_text(encoding="utf-8").splitlines()
-    )
+    accounts = cfg.beancount.account_list_file.read_text(encoding="utf-8").splitlines()
 
     request_payload: RefineRequest = {
         "transaction_text": tx_block_str,
@@ -636,10 +625,10 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C9
 
     llm_output = stream_reasoning_and_capture_output(stdout)
     stdout.close()
+
     ret = proc.wait()
     if ret != 0:
-        print("Error: server returned non-zero exit code", file=sys.stderr)
-        sys.exit(1)
+        raise subprocess.CalledProcessError(ret, cmd)
 
     # 6. Parse the response — strip any markdown fences, then parse JSON.
     llm_output = demarkdownify(llm_output).strip()
@@ -654,12 +643,9 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C9
         print(llm_output, file=sys.stderr)
         sys.exit(1)
 
-    # Preserve original/inline comments: strip ONLY leading block-comment lines
-    # that the LLM may have added as reasoning (comments above the transaction
-    # are not part of the extracted block).
+    # We will not delete comments, either sent by the user in the original
+    # transaction and returning to us, or inserted by the LLM.
     lines = rewritten_tx_raw.splitlines(True)
-    while lines and lines[0].lstrip().startswith(";"):
-        lines = lines[1:]
     rewritten_tx = "".join(lines).rstrip("\n") + "\n"
 
     if not validate_refined_transaction(rewritten_tx):
@@ -674,7 +660,10 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C9
     # 7. Reassemble the file with only the target block replaced.
     new_lines = (
         before
-        + [ln if ln.endswith("\n") else ln + "\n" for ln in rewritten_tx.splitlines(True)]
+        + [
+            ln if ln.endswith("\n") else ln + "\n"
+            for ln in rewritten_tx.splitlines(True)
+        ]
         + after
     )
     new_content = "".join(new_lines)
@@ -690,6 +679,9 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C9
     )
     if diff:
         print_diff(diff)
+    else:
+        print(f"No changes to {tx_file}", file=sys.stderr)
+        return
 
     # 8. Prompt for / perform the write.
     if args.no:
@@ -710,7 +702,7 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C9
             if answer == "q":
                 sys.exit(0)
             if answer == "p" and documents_data:
-                _preview_document(documents_data[0]["filepath"], tx_file, cfg)
+                preview_local_document(documents_data[0]["filepath"], tx_file, cfg)
                 continue
             if answer == "y":
                 break
@@ -938,6 +930,9 @@ def do_import(cfg: Configuration, args: argparse.Namespace) -> None:
     diff = result.diff()
     if diff:
         print_diff(diff)
+    else:
+        print(f"No changes to {args.filename}", file=sys.stderr)
+        return
 
     result.commit()
 
@@ -977,6 +972,9 @@ def do_ingest(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C9
         diff = imp.diff()
         if diff:
             print_diff(diff)
+        else:
+            print(f"No changes to {args.filename}", file=sys.stderr)
+            return
 
         if args.yes:
             action = "import"
@@ -1349,6 +1347,9 @@ def do_associate(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa:
         )
         if diff:
             print_diff(diff)
+        else:
+            print(f"No changes to {receipt_path}", file=sys.stderr)
+            return
 
         if not args.no and not args.yes:
             while True:

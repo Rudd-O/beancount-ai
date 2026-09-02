@@ -17,7 +17,7 @@ import ssl
 import sys
 from functools import partial
 from pathlib import Path
-from typing import IO, Literal, TypedDict, cast
+from typing import IO, Any, Literal, TypedDict, cast
 
 from openai._streaming import Stream
 from openai.types.chat import (
@@ -27,6 +27,8 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
 )
 from webdav4.client import Client, ResourceNotFound  # type:ignore
+
+from beancount_ai.structs import RefineRequest
 
 from .config import Configuration, WebDAVDocumentSourcesConfiguration
 from .pdf import render_pdf_pages_to_png
@@ -293,17 +295,6 @@ def do_process(cfg: Configuration, args: argparse.Namespace) -> None:
     stream_reasoning_and_output(cast(Stream[ChatCompletionChunk], resp))
 
 
-class RefineDocument(TypedDict):
-    filepath: str
-    data: str
-
-
-class RefineRequest(TypedDict):
-    transaction_text: str
-    accounts: list[str]
-    documents: list[RefineDocument]
-
-
 def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:
     """Refine an existing Beancount transaction using its linked documents.
 
@@ -320,26 +311,52 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:
     request_data = json.loads(sys.stdin.read())
     if (
         not isinstance(request_data, dict)
-        or not isinstance(request_data.get("transaction_text"), str)
+        or "transaction_text" not in request_data
+        or not isinstance(request_data["transaction_text"], str)
         or not request_data["transaction_text"].strip()
     ):
+        print("error: Invalid request: missing transaction_text", file=sys.stderr)
+        sys.exit(1)
+
+    request_data = cast(dict[Any, Any], request_data)
+    if "documents" not in request_data:
+        request_data["documents"] = []
+    for dn, d in enumerate(cast(list[Any], request_data["documents"])):
+        if "filepath" not in d or not isinstance(d["filepath"], str):
+            print(
+                f"error: Invalid request: document {dn} missing or invalid file path",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if "data" not in d or not isinstance(d["data"], str):
+            print(
+                f"error: Invalid request: document {dn} missing or invalid data",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    if (
+        "accounts" not in request_data
+        or not isinstance(request_data["accounts"], list)
+        or not all(
+            isinstance(acc, str) for acc in cast(list[Any], request_data["accounts"])
+        )
+    ):
         print(
-            "error: Invalid request: missing transaction_text", file=sys.stderr
+            f"error: Invalid request: account list missing or invalid", file=sys.stderr
         )
         sys.exit(1)
 
-    transaction_text = request_data["transaction_text"]
-    accounts = request_data.get("accounts", [])
-    documents = request_data.get("documents", [])
+    request = cast(RefineRequest, request_data)
+    transaction_text = request["transaction_text"]
+    accounts = request["accounts"]
+    documents = request.get("documents", [])
 
     image_parts: list[ChatCompletionContentPartImageParam] = []
     for doc in documents:
         fn = Path(doc["filepath"])
         suffix = fn.suffix.lower()
         if suffix not in _EXT:
-            print(
-                f"error: unsupported document format: {suffix}", file=sys.stderr
-            )
+            print(f"error: unsupported document format: {suffix}", file=sys.stderr)
             sys.exit(1)
         raw = base64.b64decode(doc["data"])
         image_parts.extend(file_to_image_parts(doc["filepath"], raw))

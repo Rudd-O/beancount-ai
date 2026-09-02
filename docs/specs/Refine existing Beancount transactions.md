@@ -48,7 +48,7 @@ The line number may point to **any line within the target transaction** (not onl
 
 ### Linked document discovery
 
-The client scans `tx_block` lines for document metadata keys using the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (colon directly after the key, then a quoted path — matching both Beancount's `document: "path"` and the numbered `documentN:` forms, and consistent with `update_document_metadata()` in `client/cli.py:404`). All `document`, `document2`, … forms are captured. Extracted paths are client-local and resolved as relative to the directory containing the transaction file being read (fall back to `cfg.beancount.main_folder` if a directory-relative path does not exist). Missing/unreadable files are a fail-stop error.
+The client scans `tx_block` lines for document metadata keys using the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (colon directly after the key, then a quoted path — matching both Beancount's `document: "path"` and the numbered `documentN:` forms, and consistent with `update_document_metadata()` in `client/cli.py:404`). All `document`, `document2`, … forms are captured. Extracted paths are client-local and resolved as relative to the folder containing the transaction file being read. Missing/unreadable files are a fail-stop error.
 
 ### Prompt: TRANSACTION_REFINEMENT_PROMPT.md structure
 
@@ -205,11 +205,12 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:
     # 4. Collect document contents (client-local, resolved relative to the tx file).
     documents_data: list[Document] = []
     for doc_path in doc_paths:
-        resolved = resolve_document_path(doc_path, tx_file, cfg)  # see below
-        if not resolved.exists():
-            print(f"Error: linked document not found: {doc_path}", file=sys.stderr)
+        resolved = resolve_local_document_path(doc_path, tx_file, cfg)  # see below
+        try:
+            raw = resolved.read_bytes()
+        except Exception: # Something analogous to this.
+            print(f"Error: linked document could not be accessed: {doc_path}", file=sys.stderr)
             sys.exit(1)
-        raw = resolved.read_bytes()
         documents_data.append(Document(
             filepath=doc_path,
             data=base64.b64encode(raw).decode("ascii"),
@@ -300,7 +301,7 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:
 
 Scans lines of the transaction for document metadata entries matching the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (capture group 1 is the optional numeric suffix, group 2 is the quoted path). Returns the extracted paths as a deduplicated list preserving first-seen order. This matches Beancount's `document: "path"` and the numbered `documentN:` forms, and is consistent with the key form handled by `update_document_metadata()` in `client/cli.py:404`.
 
-### Helper: `resolve_document_path(doc_path: str, tx_file: Path, cfg: Configuration) -> Path`
+### Helper: `resolve_local_document_path(doc_path: str, tx_file: Path, cfg: Configuration) -> Path`
 
 Resolves a `document:` value to a client-local path:
 1. If `doc_path` is absolute → use it as-is.
@@ -371,17 +372,17 @@ This covers both "paths relative to the Beancount data root" (the usual arrangem
 | File | Changes |
 |---|---|
 | `beancount_ai/server/cli.py` | Add `do_refine()` handler; add `TRANSACTION_REFINEMENT_PROMPT_PATH` constant; register `beanai.Refine` in `build_parser()` (**with no positional argument**) and `dispatch` table |
-| `beancount_ai/client/cli.py` | Add new subcommand (for `do_refine`) in `build_parser()` with argparse entries for `<file_path>`, `<line_number>` (positional) and `--yes/--no`; add helpers `extract_document_paths()` and `resolve_document_path()`; add `do_refine()` function with document discovery, account-list read, plain-JSON stdin server call, diff + interactive apply/write logic; register `do_refine` in client `dispatch` dict |
+| `beancount_ai/client/cli.py` | Add new subcommand (for `do_refine`) in `build_parser()` with argparse entries for `<file_path>`, `<line_number>` (positional) and `--yes/--no`; add helpers `extract_document_paths()` and `resolve_local_document_path()`; add `do_refine()` function with document discovery, account-list read, plain-JSON stdin server call, diff + interactive apply/write logic; register `do_refine` in client `dispatch` dict |
 
 ### Implementation order (proposed)
 
 1. Write `TRANSACTION_REFINEMENT_PROMPT.md` — define preservation rules, modification instructions, and example rewrites first (with `{transaction_text}` and `{accounts}` placeholders, mirroring `RECEIPT_CONVERSION_PROMPT.md`)
 2. Server-side: implement `do_refine()` — read plain-JSON request from stdin, validate `transaction_text`, extension-check + base64-decode + `file_to_image_parts()` each document, fill prompt placeholders, LLM call, stream output; register `beanai.Refine` (no argument) in `build_parser()` and `dispatch`
-3. Client-side helpers: `extract_document_paths()` (scan tx metadata for `document:`/`documentN:`) and `resolve_document_path()` (resolve relative to the tx file, then `main_folder`)
+3. Client-side helpers: `extract_document_paths()` (scan tx metadata for `document:`/`documentN:`) and `resolve_local_document_path()` (resolve relative to the tx file, then `main_folder`)
 4. Client-side `do_refine()` wiring: file read → line validation → tx extraction → doc discovery → read account list → plain-JSON stdin server call → parse → reassemble + diff → interactive apply/write
 5. Client CLI arg parser entry in `build_parser()` with positional + optional args
 6. Register new subcommand in client's dispatch dict
-7. Add tests: unit tests for `extract_document_paths()` and `resolve_document_path()`, doctests for line-range validation, mock LLM response handling
+7. Add tests: unit tests for `extract_document_paths()` and `resolve_local_document_path()`, doctests for line-range validation, mock LLM response handling
 8. Update all relevant documentation to cover the new feature.
 
 ---

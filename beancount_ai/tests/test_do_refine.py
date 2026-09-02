@@ -35,9 +35,7 @@ REFINED_BLOCK = (
 def _make_config(folder: pathlib.Path) -> Configuration:
     main = folder / "main.bean"
     main.write_text(
-        "; header comment above tx\n"
-        + ORIGINAL_BLOCK
-        + "\n"
+        "; header comment above tx\n" + ORIGINAL_BLOCK + "\n"
         '2026-04-01 * "Other" "Unchanged"\n'
         "  Expenses:Other   1.00 CHF\n"
     )
@@ -100,12 +98,16 @@ def fake_call(monkeypatch: "pytest.MonkeyPatch") -> dict[str, Any]:
     return state
 
 
-def test_do_refine_writes_refined_block(tmp_path: pathlib.Path, fake_call: dict[str, Any]) -> None:
+def test_do_refine_writes_refined_block(
+    tmp_path: pathlib.Path, fake_call: dict[str, Any]
+) -> None:
     cfg = _make_config(tmp_path)
     fake_call["llm_output"] = json.dumps(
         {"transaction": REFINED_BLOCK, "changes_summary": "split expenses"}
     )
-    args = mock.Mock(file_path=str(tmp_path / "main.bean"), line_number=2, yes=True, no=False)
+    args = mock.Mock(
+        file_path=str(tmp_path / "main.bean"), line_number=2, yes=True, no=False
+    )
 
     do_refine(cfg, args)
 
@@ -127,31 +129,17 @@ def test_do_refine_writes_refined_block(tmp_path: pathlib.Path, fake_call: dict[
     assert payload["documents"][0]["data"]  # base64, non-empty
 
 
-def test_do_refine_strips_leading_llm_comments(tmp_path: pathlib.Path, fake_call: dict[str, Any]) -> None:
-    cfg = _make_config(tmp_path)
-    fake_call["llm_output"] = json.dumps(
-        {
-            "transaction": (
-                "; this is reasoning\n"
-                "; more reasoning\n"
-                + REFINED_BLOCK
-            )
-        }
-    )
-    args = mock.Mock(file_path=str(tmp_path / "main.bean"), line_number=2, yes=True, no=False)
-    do_refine(cfg, args)
-    new_content = (tmp_path / "main.bean").read_text(encoding="utf-8")
-    assert "; this is reasoning" not in new_content
-    assert "more reasoning" not in new_content
-
-
 def test_do_refine_no_flag_does_not_write(
-    tmp_path: pathlib.Path, fake_call: dict[str, Any], capsys: "pytest.CaptureFixture[str]"
+    tmp_path: pathlib.Path,
+    fake_call: dict[str, Any],
+    capsys: "pytest.CaptureFixture[str]",
 ) -> None:
     cfg = _make_config(tmp_path)
     fake_call["llm_output"] = json.dumps({"transaction": REFINED_BLOCK})
     original = (tmp_path / "main.bean").read_text(encoding="utf-8")
-    args = mock.Mock(file_path=str(tmp_path / "main.bean"), line_number=2, yes=False, no=True)
+    args = mock.Mock(
+        file_path=str(tmp_path / "main.bean"), line_number=2, yes=False, no=True
+    )
     do_refine(cfg, args)
     assert (tmp_path / "main.bean").read_text(encoding="utf-8") == original
     assert "--no requested" in capsys.readouterr().err
@@ -161,7 +149,9 @@ def test_do_refine_missing_file(
     tmp_path: pathlib.Path, capsys: "pytest.CaptureFixture[str]"
 ) -> None:
     cfg = _make_config(tmp_path)
-    args = mock.Mock(file_path=str(tmp_path / "nope.bean"), line_number=1, yes=True, no=False)
+    args = mock.Mock(
+        file_path=str(tmp_path / "nope.bean"), line_number=1, yes=True, no=False
+    )
     with pytest.raises(SystemExit):
         do_refine(cfg, args)
     assert "file not found" in capsys.readouterr().err
@@ -172,29 +162,39 @@ def test_do_refine_line_not_in_transaction(
 ) -> None:
     cfg = _make_config(tmp_path)
     # Line 1 is the comment header, not part of any transaction.
-    args = mock.Mock(file_path=str(tmp_path / "main.bean"), line_number=1, yes=True, no=False)
+    args = mock.Mock(
+        file_path=str(tmp_path / "main.bean"), line_number=1, yes=True, no=False
+    )
     with pytest.raises(SystemExit):
         do_refine(cfg, args)
     assert "Error" in capsys.readouterr().err
 
 
 def test_do_refine_malformed_llm_output(
-    tmp_path: pathlib.Path, fake_call: dict[str, Any], capsys: "pytest.CaptureFixture[str]"
+    tmp_path: pathlib.Path,
+    fake_call: dict[str, Any],
+    capsys: "pytest.CaptureFixture[str]",
 ) -> None:
     cfg = _make_config(tmp_path)
     fake_call["llm_output"] = "not json at all"
-    args = mock.Mock(file_path=str(tmp_path / "main.bean"), line_number=2, yes=True, no=False)
+    args = mock.Mock(
+        file_path=str(tmp_path / "main.bean"), line_number=2, yes=True, no=False
+    )
     with pytest.raises(SystemExit):
         do_refine(cfg, args)
     assert "could not parse LLM response" in capsys.readouterr().err
 
 
-def test_do_refine_interactive_no(tmp_path: pathlib.Path, fake_call: dict[str, Any]) -> None:
+def test_do_refine_interactive_no(
+    tmp_path: pathlib.Path, fake_call: dict[str, Any]
+) -> None:
     """Answering 'n' at the prompt leaves the file untouched and returns normally."""
     cfg = _make_config(tmp_path)
     fake_call["llm_output"] = json.dumps({"transaction": REFINED_BLOCK})
     original = (tmp_path / "main.bean").read_text(encoding="utf-8")
-    args = mock.Mock(file_path=str(tmp_path / "main.bean"), line_number=2, yes=False, no=False)
+    args = mock.Mock(
+        file_path=str(tmp_path / "main.bean"), line_number=2, yes=False, no=False
+    )
     with mock.patch.object(client_cli, "input", side_effect=["n"]):
         do_refine(cfg, args)
     assert (tmp_path / "main.bean").read_text(encoding="utf-8") == original
