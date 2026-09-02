@@ -168,7 +168,7 @@ request_data = json.loads(sys.stdin.read())  # {"transaction_text": "...", "acco
 1. Validate input: reject if the request is not a JSON object or `transaction_text` is missing/empty (responds with stderr `error:...` + `sys.exit(1)`)
 2. Extract `transaction_text`, `accounts`, and `documents` from the request
 3. For each document in `documents`:
-   - Validate the extension against the supported set (`.jpg`, `.jpeg`, `.png`, `.pdf`); any other extension is a fail-stop error
+   - Validate the extension against the supported set (`.jpg`, `.jpeg`, `.png`, `.pdf`); any other extension is skipped after emitting a warning to stderr (`warning: unsupported document format, skipping: <ext>`), and processing continues with the remaining documents
    - Base64-decode `data` back to raw bytes
    - Call `file_to_image_parts(filepath, raw)` (this internally calls `render_pdf_pages_to_png()` for PDFs, and builds an `image_url` part for JPG/PNG)
 4. Load `TRANSACTION_REFINEMENT_PROMPT.md` at runtime, fill `{transaction_text}` and `{accounts}` placeholders (`accounts` is `json.dumps(request["accounts"])`)
@@ -330,7 +330,7 @@ This covers both "paths relative to the Beancount data root" (the usual arrangem
 | Scenario | Server behavior |
 |---|---|
 | Input is not a JSON object, or `transaction_text` is missing/empty/malformed | Responds with stderr `error: Invalid request: missing transaction_text` then exits code 1 |
-| Document has an unsupported extension (anything other than `.jpg`/`.jpeg`/`.png`/`.pdf`) | Emits `error: unsupported document format: <ext>` to stderr + `sys.exit(1)` |
+| Document has an unsupported extension (anything other than `.jpg`/`.jpeg`/`.png`/`.pdf`) | Emits `warning: unsupported document format, skipping: <ext>` to stderr; the document is ignored and processing continues with the remaining documents |
 | LLM call fails (network/auth/model error) | Emits JSON error line to stdout + `sys.exit(1)` (same as existing handlers) |
 | Empty document list after processing | No images sent — LLM only uses text prompt + original transaction block |
 | Transaction is malformed | LLM needs to decide what to do on its own |

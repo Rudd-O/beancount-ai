@@ -356,8 +356,8 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:
         fn = Path(doc["filepath"])
         suffix = fn.suffix.lower()
         if suffix not in _EXT:
-            print(f"error: unsupported document format: {suffix}", file=sys.stderr)
-            sys.exit(1)
+            print(f"warning: unsupported document format, skipping: {suffix}", file=sys.stderr)
+            continue
         raw = base64.b64decode(doc["data"])
         image_parts.extend(file_to_image_parts(doc["filepath"], raw))
 
