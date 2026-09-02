@@ -37,6 +37,12 @@ bean-ai ingest
 bean-ai associate
 ```
 
+**Refine an existing transaction using its linked documents**:
+
+```bash
+bean-ai refine <file_path> <line_number>   # rewrites that transaction based on its linked receipt(s)
+```
+
 Find a reference to all subcommands in the [Commands](docs/Commands.md) documentation.
 
 ## Details
@@ -142,6 +148,7 @@ beanai.Process * financial pim allow
 beanai.Fetch * financial pim allow
 beanai.Remove * financial pim allow
 beanai.HelpAssociateReceipt * financial pim allow
+beanai.Refine * financial pim allow
 ```
 
 If you did everything right, `bean-ai list-unassociated` should show you your unassociated receipts, and everything else will work fine.

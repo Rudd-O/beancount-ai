@@ -1,6 +1,6 @@
 # Spec: Refining existing Beancount transactions
 
-Status: planned.
+Status: developed.
 
 ## Overview
 
