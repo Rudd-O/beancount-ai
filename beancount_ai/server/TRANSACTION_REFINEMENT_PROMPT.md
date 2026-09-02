@@ -83,7 +83,7 @@ A short example of a refinement that adds a missing line item, corrects an amoun
 
 1. Contains the date, the flag, the payee and the narration.
 2. (indented) metadata entry for the transaction.
-3. (indented) a leg (entry) of the transaction, featuring an expense account.
+3. (indented) a leg (entry) of the transaction, featuring an expense account.  It is valid for up to one transaction entry to have no amount — Beancount automatically deduces the balance and assigns it to that entry.
 4. (indented) another leg of the transaction, showing a funding account and an amount.
 5. (further indented) a metadata entry for *this leg* of the transaction.
 
