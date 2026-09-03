@@ -1,7 +1,10 @@
+import fcntl
 import json
 import os
+import sys
 from pathlib import Path
-from typing import ClassVar
+from types import TracebackType
+from typing import IO, ClassVar
 
 CONF_DEFAULT = Path.home() / ".config" / "bean-ai.json"
 
@@ -21,6 +24,75 @@ class BeancountConfiguration:
     main_file: Path
     ingestion_destination_file: Path | None
     account_list_file: Path
+    _lock_fh: IO[bytes] | None
+
+    def __init__(
+        self,
+        main_file: Path,
+        account_list_file: Path,
+        ingestion_destination_file: Path | None = None,
+    ) -> None:
+        self.main_file = main_file
+        self.ingestion_destination_file = ingestion_destination_file
+        self.account_list_file = account_list_file
+        self._lock_fh = None
+        # Lock right away, at instantiation, so that no caller can forget to do it.
+        self.lock()
+
+    def __del__(self) -> None:
+        fh = getattr(self, "_lock_fh", None)
+        if fh is not None:
+            self.unlock()
+
+    def lock(self) -> None:
+        """Acquire an exclusive advisory lock on the main Beancount file.
+
+        Called from :meth:`__init__`; idempotent -- a second call on an
+        already-locked instance is a no-op.  The lock is held until :meth:`unlock`
+        is called or the process exits, which (for the one-shot CLI) means it
+        is held for the duration of the enclosing subcommand, so that
+        concurrent invocations of data-modifying subcommands queue up one
+        behind the other instead of trampling each other's data.  A
+        non-blocking attempt is made first; if another process already holds
+        the lock, a message is printed to standard error and the lock is then
+        attempted again, this time blocking (hanging) until it is released.
+
+        The open file handle is kept alive on the instance so that the lock
+        (tied to the open file description) is not accidentally released by
+        garbage collection.
+        """
+        if self._lock_fh is not None:
+            return
+        fh = open(self.main_file, "rb")
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, InterruptedError):
+            print(
+                f"Beancount data files ({self.main_file}) are locked by another process; "
+                "waiting until the lock is released ...",
+                file=sys.stderr,
+            )
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        self._lock_fh = fh
+
+    def unlock(self) -> None:
+        """Release the advisory lock, if it was acquired."""
+        if self._lock_fh is not None:
+            fcntl.flock(self._lock_fh.fileno(), fcntl.LOCK_UN)
+            self._lock_fh.close()
+            self._lock_fh = None
+
+    def __enter__(self) -> "BeancountConfiguration":
+        self.lock()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        self.unlock()
 
     @property
     def ingestion_destination_path(self) -> Path:
@@ -85,14 +157,13 @@ class Configuration:
             data = json.load(fh)
         instance = cls.__new__(cls)
         instance.target_vm = data.get("target_vm", None)
-        instance.beancount = BeancountConfiguration()
-        instance.beancount.main_file = Path(data["beancount"]["main_file"])
         tdf = data["beancount"].get("ingestion_destination_file", None)
         if tdf is not None:
             tdf = Path(tdf)
-        instance.beancount.ingestion_destination_file = tdf
-        instance.beancount.account_list_file = Path(
-            data["beancount"]["account_list_file"]
+        instance.beancount = BeancountConfiguration(
+            main_file=Path(data["beancount"]["main_file"]),
+            account_list_file=Path(data["beancount"]["account_list_file"]),
+            ingestion_destination_file=tdf,
         )
         cls.instance = instance
         return cls.instance

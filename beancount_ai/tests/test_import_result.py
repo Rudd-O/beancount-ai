@@ -53,11 +53,11 @@ def _make_config(
     (folder / "imported.bean").write_text("")
     (folder / "accounts.txt").write_text("Expenses:Food\nAssets:Checking\n")
 
-    bc = BeancountConfiguration()
-    bc.main_file = main
-    bc.ingestion_destination_file = pathlib.Path("imported.bean")
-    bc.account_list_file = folder / "accounts.txt"
-    return bc
+    return BeancountConfiguration(
+        main_file=main,
+        account_list_file=folder / "accounts.txt",
+        ingestion_destination_file=pathlib.Path("imported.bean"),
+    )
 
 
 @pytest.fixture
@@ -350,11 +350,13 @@ class TestRollback:
         ingest_path: pathlib.Path = tmp_path / "ingest.bean"
         ingest_path.write_text(content_before)
 
-        bc: BeancountConfiguration = BeancountConfiguration()
-        bc.main_file = tmp_path / "dummy.bean"
-        bc.ingestion_destination_file = pathlib.Path("ingest.bean")
-        bc.account_list_file = tmp_path / "acct.txt"
+        (tmp_path / "dummy.bean").write_text("")
         (tmp_path / "acct.txt").write_text("")
+        bc: BeancountConfiguration = BeancountConfiguration(
+            main_file=tmp_path / "dummy.bean",
+            account_list_file=tmp_path / "acct.txt",
+            ingestion_destination_file=pathlib.Path("ingest.bean"),
+        )
 
         result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf")
         result.ingestion_destination_path = ingest_path
@@ -408,11 +410,13 @@ class TestRollback:
         ingest_file: pathlib.Path = tmp_path / "ingest.bean"
         ingest_file.write_text(ingest_content)
 
-        bc: BeancountConfiguration = BeancountConfiguration()
-        bc.main_file = tmp_path / "dummy.bean"
-        bc.ingestion_destination_file = pathlib.Path("ingest.bean")
-        bc.account_list_file = tmp_path / "acct.txt"
+        (tmp_path / "dummy.bean").write_text("")
         (tmp_path / "acct.txt").write_text("")
+        bc: BeancountConfiguration = BeancountConfiguration(
+            main_file=tmp_path / "dummy.bean",
+            account_list_file=tmp_path / "acct.txt",
+            ingestion_destination_file=pathlib.Path("ingest.bean"),
+        )
 
         result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf")
         result.ingestion_destination_path = ingest_file

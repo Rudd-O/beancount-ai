@@ -106,5 +106,6 @@ Client has the ability to send stdin to server, and server can respond via stdou
 ## Gotchas
 
 - Config is a singleton per process: calling `Configuration.load()` a second time returns the first result silently. If testing different configs, use separate processes or `--config`.
+- `BeancountConfiguration` takes an exclusive advisory lock on `main_file` as soon as it is instantiated (and `Configuration.load()` instantiates it). The lock is held until `unlock()` or process exit, so data-modifying subcommands queue up. Consequences: `main_file` must exist at config load time (a missing file raises `FileNotFoundError`); tests that build multiple configs pointing at the same file in one process will block; and two concurrent `bean-ai` invocations against the same file serialize.
 - Server emits JSONL with no buffering delay (flushes every 10 chunks). Over qrexec this can be slow; client handles line-by-line reading.
 - `bean-ai refine` refines a *range* of transactions: with `first_line_number`/`last_line_number` it targets every transaction that *begins* on a line within that (inclusive) span; a line number may point at any line *within* a transaction. It writes the file once, at the end, only if at least one accepted refinement changed it.

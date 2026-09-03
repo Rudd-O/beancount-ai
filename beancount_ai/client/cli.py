@@ -72,6 +72,8 @@ def main() -> None:
         "associate": associate.run,
         "refine": refine.run,
     }
+    # The BeancountConfiguration was locked when it was instantiated (see
+    # Configuration.load); the lock is held for the rest of the process.
     dispatch[args.command](cfg, args)
 
 

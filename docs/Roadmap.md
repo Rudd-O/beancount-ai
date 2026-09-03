@@ -6,7 +6,7 @@ Generated from code review of all Python files under `beancount_ai`.
 
 ## 1. Test infrastructure
 
-- **Expand unit-test coverage** — the following test files exist: `test_update_document_metadata.py` (the `update_document_metadata` helper), `test_refine_helpers.py` (`extract_document_paths`, `resolve_local_document_path`), `test_do_refine.py` and `test_do_refine_server.py` (client & server `do_refine` flows), `test_import_result.py` (`ImportResult`), and `test_split_at_transaction_by_line_number.py` (the transaction-splitting helpers, incl. `split_into_transactions_by_range`). Still untested, add tests for:
+- **Expand unit-test coverage** — the following test files exist: `test_update_document_metadata.py` (the `update_document_metadata` helper), `test_refine_helpers.py` (`extract_document_paths`, `resolve_local_document_path`), `test_do_refine.py` and `test_do_refine_server.py` (client & server `do_refine` flows), `test_import_result.py` (`ImportResult`), `test_beancount_lock.py` (the `BeancountConfiguration` advisory file lock and `write_beancount_file()`), and `test_split_at_transaction_by_line_number.py` (the transaction-splitting helpers, incl. `split_into_transactions_by_range`). Still untested, add tests for:
   - `load_transactions` and `load_transaction_contexts` in `beancount_loader.py`
   - `predict_receipt_destination_path`, `shorten_fn`, and `insert_document_metadata`
   - PDF rendering edge cases (native / 150 DPI floor / 300 DPI cap / the 25-page limit)
@@ -18,8 +18,7 @@ Generated from code review of all Python files under `beancount_ai`.
 
 ## 3. Transaction safety
 
-- **Beancount data lock** — functions on the client that attempt to edit data may trample on each other if accidentally invoked in parallel (e.g. from multiple terminals), potentially destroying data.  The mechanism we will use to prevent this (in effect, making multiple data-modification commands queue up one behind the other) is POSIX advisory file locking -- a method on the BeancountConfiguration class should be called that opens the main Beancount file for reading, then locks the file.  The locking should first be grabbed such that, if the lock is already grabbed by another process, a message is printed to standard error indicating that the Beancount data files are locked by another process, and the lock is attempted to be grabbed again, this time to lock indefinitely (hang) until the lock is released.  This method is to be called right at the beginning of any function, or at the latest right before reading any Beancount file.  In addition to this, any Beancount file writes should be flushed to disk, to improve data reliability.  It may even be worthwhile to attempt to grab the lock *right when the BeancountConfiguration object is instantiated* (keeping a reference to the open file alive in the class instance, so it doesn't get garbage-collected).
-- **Beancount file backup before editing** — `ImportResult.commit()` (`client/commands/importcmd.py:99`) appends directly to the ingestion file via raw text manipulation, and the `refine` / `associate` commands write `tx_file.write_text()` directly (`client/commands/refine.py:246`, `client/commands/associate.py:308`). If the process crashes mid-write or produces malformed output, the ledger is corrupted with no recovery path. Add:
+- **Beancount file backup before editing** — `ImportResult.commit()` (`client/commands/importcmd.py:99`) appends directly to the ingestion file via raw text manipulation, and the `refine` / `associate` commands rewrite their target file through `write_beancount_file()` (`client/beanfiles.py`), a whole-file write that flushes and `os.fsync()`s to disk on completion. The per-subcommand advisory lock (implemented; see `BeancountConfiguration.lock()`) keeps concurrent writers from clobbering each other, and the `fsync` guards against a crash losing unsynced data, but there is still no recovery path if the process produces malformed output or is interrupted between `open()` and the write. Add:
   - Write-to-temp + atomic rename (or `shutil.move` after validation).
   - Pre-edit backup (e.g., append `.bak-YYYYMMDD-HHMMSS`).
 
@@ -51,7 +50,6 @@ This project originally had a local file-based receipt backend but for expedienc
 
 | Priority | Item |
 |---|---|
-| High | Beancount data lock |
 | High | Beancount file edit safety — backup before edit + atomic write |
 | High | Un-comment / wire up the `associate` ambiguous match picker from the spec |
 | Medium | Config schema validation (missing keys, empty values) |

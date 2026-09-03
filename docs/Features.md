@@ -87,3 +87,16 @@ the refinement:
 
 The `document:` metadata tags are preserved unchanged, and the linked
 document files are read-only inputs — they are never moved or deleted.
+
+## Protecting the ledger
+
+All of the above operations share two safety properties:
+
+* **One writer at a time.** `bean-ai` takes an exclusive lock on the main
+  Beancount file as soon as the configuration is loaded and holds it for the
+  whole subcommand.  Run `bean-ai` from a second terminal while the first is
+  working and the second prints a notice and waits for the first to finish —
+  it will not overwrite or interleave with the in-progress write.
+* **Durable writes.** Every write to a Beancount file is flushed and pushed
+  to disk (`fsync`) before `bean-ai` proceeds, so an interrupted run does not
+  leave a truncated or partial ledger entry.

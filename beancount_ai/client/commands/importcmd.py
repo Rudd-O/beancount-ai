@@ -117,6 +117,7 @@ class ImportResult:
                 lastchar = f.read()
                 f.write(self._formatted_transaction_text(lastchar))
                 f.flush()
+                os.fsync(f.fileno())
 
                 print(
                     f"The transaction has been imported to {dest}",

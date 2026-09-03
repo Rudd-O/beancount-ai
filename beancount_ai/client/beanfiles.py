@@ -52,6 +52,19 @@ def predict_receipt_destination_path(
     return receipt_path
 
 
+def write_beancount_file(path: Path, text: str) -> None:
+    """Write *text* to a Beancount file, flushing and fsyncing to disk.
+
+    The explicit flush-to-disk improves data reliability: if the process
+    crashes in the middle of a write (or the power fails), the ledger is less
+    likely to be left half-written.
+    """
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
 def resolve_local_document_path(doc_path: str, tx_file: Path) -> Path:
     """Resolve a ``document:`` value to a client-local path.
 

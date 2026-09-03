@@ -44,10 +44,11 @@ def _make_config(folder: pathlib.Path) -> Configuration:
     (folder / "receipts").mkdir()
     (folder / "receipts" / "2026-03-15.coop.pdf").write_bytes(b"%PDF-1.4 fake")
 
-    bc = BeancountConfiguration()
-    bc.main_file = main
-    bc.ingestion_destination_file = None
-    bc.account_list_file = folder / "accounts.txt"
+    bc = BeancountConfiguration(
+        main_file=main,
+        account_list_file=folder / "accounts.txt",
+        ingestion_destination_file=None,
+    )
     cfg = object.__new__(Configuration)
     cfg.target_vm = None
     cfg.beancount = bc

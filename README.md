@@ -73,6 +73,13 @@ Find a reference to all subcommands in the [Commands](docs/Commands.md) document
 
 `ingest`, `refine` and `associate` work interactively by default, but they support batch operation too.  They support flag `--no` which does all the work but never touches your files.  They all also support mode `--yes`, which goes ahead and makes all modifications to your Beancount data, importing receipts into your Beancount folder and deleting them from the source.  Any exceptions processing receipts when using these two flags are printed (summarized) as they take place, and they are printed in detail at the end of the run; normally (in interactive mode), an exception interrupts the whole process at the first failure.
 
+### Protecting your Beancount data
+
+`bean-ai` guards against two ways your ledger could be damaged:
+
+* **Concurrent invocations.** The moment the configuration is loaded (before any subcommand runs), `bean-ai` takes an exclusive advisory lock on your main Beancount file (`beancount.main_file`) and holds it for the duration of the whole subcommand.  If you run `bean-ai` in one terminal while another `bean-ai` (or any other process holding that lock) is still working, the second one prints a notice to standard error and then waits until the first one is done, instead of the two trampling each other's data.  In effect, data-modifying commands queue up one behind the other.
+* **Crash-during-write.** Every Beancount file write is flushed and pushed all the way to disk (`fsync`ed) before `bean-ai` moves on, so a crash or power loss cannot leave a half-written ledger.
+
 ### Naming convention for receipt files
 
 Imported receipts are saved under `<beancount_folder>/<account_with_slashes>/` with the naming pattern:

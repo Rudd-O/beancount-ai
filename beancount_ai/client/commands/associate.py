@@ -19,6 +19,7 @@ from beancount_ai.client.beancount_loader import (  # type:ignore
 from beancount_ai.client.beanfiles import (
     predict_receipt_destination_path,
     update_document_metadata,
+    write_beancount_file,
 )
 from beancount_ai.client.config import Configuration
 from beancount_ai.client.display import print_diff
@@ -305,7 +306,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
 
         print(f"Receipt saved to {receipt_path}", file=sys.stderr)
 
-        tx_file.write_text(new_content, encoding="utf-8")
+        write_beancount_file(tx_file, new_content)
         print(
             f"Updated document metadata on line {line_no} of {tx_file}", file=sys.stderr
         )

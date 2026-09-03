@@ -12,6 +12,7 @@ from beancount_ai.client.beanfiles import (
     extract_document_paths,
     resolve_local_document_path,
     split_into_transactions_by_range,
+    write_beancount_file,
 )
 from beancount_ai.client.config import Configuration
 from beancount_ai.client.display import print_diff
@@ -243,7 +244,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
 
     if new_lines != original_lines:
         new_text = "".join(new_lines)
-        tx_file.write_text(new_text, encoding="utf-8")
+        write_beancount_file(tx_file, new_text)
         print(f"Updated transactions in {tx_file}", file=sys.stderr)
 
 
