@@ -8,15 +8,18 @@ beancount-ai/
 └── docs/specs/…                               # specs for features in development or developed
 │── pyproject.toml                             # Python project definition and configuration ifle
 │
+├── beancount_ai/structs.py                    # request/response TypedDicts shared by client and server
+│
 ├── beancount_ai/server/                       # Runs on server VM which has access to receipts and LLM
-│   └── cli.py                                 # beanai.List + beanai.Process subcommands
-│   └── pdf.py                                 # PDF→PNG conversion for receipt images
+│   ├── cli.py                                 # beanai.* subcommands (Fetch, Remove, Process, Refine, …)
+│   ├── config.py                              # server-side configuration
+│   ├── pdf.py                                 # PDF→PNG conversion for receipt images
 │   └── *_PROMPT.md                            # prompts for LLMs
 │
 └── beancount_ai/client/                       # Runs on client VM which has Beancount data
-    └── cli.py                                 # list + process subcommands → calls server via qrexec/local
+    ├── cli.py                                 # list / ingest / import / associate / refine / … subcommands → calls server via qrexec/local
+    ├── config.py                              # client-side configuration
     └── beancount_loader.py                    # loads Beancount data
-    └── report.py                              # small temporary module to produce reports on modifications of Beancount files
 ```
 
 Tox (`tox --current-env`) is the test framework, and it runs Ruff, MyPy and pytest.
@@ -28,12 +31,16 @@ to catch further problems with the code.
 ## How to run
 
 **bean-ai-server** — runs on the VM that has receipt files + LLM access. CLI subcommands:
-- `bean-ai-server beanai.List -d <receipts-dir>`  lists receipts as JSON
+- `bean-ai-server beanai.ListUningested` / `beanai.ListUnassociated`  list receipts as JSON
 - `bean-ai-server beanai.Process <filename>`        processes one receipt via OpenAI-compatible API (produces JSONL output)
+- `bean-ai-server beanai.Refine`                      refines a transaction; request arrives as plain JSON on stdin (no positional argument, produces JSONL output)
+- `bean-ai-server beanai.HelpAssociateReceipt <filename>`  matches a receipt against candidate transactions (candidates arrive on stdin)
 
 **bean-ai** — runs on the VM with Beancount data. CLI subcommands:
-- `bean-ai list`        → prints receipt filenames (one per line)
+- `bean-ai list-uningested` / `list-unassociated`  → print receipt filenames (one per line)
 - `bean-ai process <file>` → streams LLM response, prints parsed Beancount tx to stdout
+- `bean-ai refine <file_path> <first_line_number> [last_line_number]` → refine one or more transactions using their linked documents
+- `bean-ai ingest` / `import <filename>` / `associate` / `fetch` / `remove` / `organize`
 
 Default config: `~/.config/bean-ai.json`. Both clients also support `--config <path>` and `$BEAN_AI_CONFIG`.
 
@@ -78,4 +85,4 @@ Client has the ability to send stdin to server, and server can respond via stdou
 
 - Config is a singleton per process: calling `Configuration.load()` a second time returns the first result silently. If testing different configs, use separate processes or `--config`.
 - Server emits JSONL with no buffering delay (flushes every 10 chunks). Over qrexec this can be slow; client handles line-by-line reading.
-- The server CLI accepts `-d` for receipts directory override only for the `List` subcommand when running directly.
+- `bean-ai refine` refines a *range* of transactions: with `first_line_number`/`last_line_number` it targets every transaction that *begins* on a line within that (inclusive) span; a line number may point at any line *within* a transaction. It writes the file once, at the end, only if at least one accepted refinement changed it.

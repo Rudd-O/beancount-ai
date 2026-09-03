@@ -9,7 +9,7 @@
 * It can automatically associate transactions already in your Beancount files with your receipts.
   * Each receipt is analyzed by the LLM to determine date / amount, then `bean-ai` queries Beancount for matching transactions; the LLM is then directed to identify the correct transaction among the search results.  Finally, `bean-ai` files the receipt appropriately, then adds the `document:` tag to the identified transaction, pointing to the filed receipt.
 * It can even help you refine transactions down to the line item.
-  * A transaction you identify (by file name and line number) will be submitted to the LLM, along with all its associated `document:`s, with instructions to enhance the transaction with all the factual detail present in the documents.  `bean-ai` then uses the response of the LLM to rewrite *only* that transaction in your Beancount file.
+  * A transaction you identify (by file name and line number — or a range of lines covering several transactions) will be submitted to the LLM, along with all its associated `document:`s, with instructions to enhance the transaction with all the factual detail present in the documents.  `bean-ai` then uses the response of the LLM to rewrite *only* that transaction in your Beancount file.
 
 This lets you have a comprehensive AI-assisted workflow where:
 
@@ -58,10 +58,11 @@ bean-ai associate
 
 ```bash
 # rewrites that transaction on line number 157 based on its linked receipt(s)
-bean-ai refine Expenses.beancount 157 # <file_path> <line_number>
+bean-ai refine Expenses.beancount 157 # <file_path> <first_line_number>
 # or batch refinement, rewrites multiple transactions between two lines
 bean-ai refine Expenses.beancount 157 408 # <file_path> <first_line_number> <last_line_number>
-
+# --clear additionally sets the flag of every modified transaction to the clear flag (*)
+bean-ai refine Expenses.beancount 157 408 --clear
 ```
 
 Find a reference to all subcommands in the [Commands](docs/Commands.md) documentation.
@@ -70,7 +71,7 @@ Find a reference to all subcommands in the [Commands](docs/Commands.md) document
 
 ### Batch operation
 
-`ingest`, `refine` and `associate` work interactively by default, but they support batch operation too.  They support flag `--no` which does all the work but never touches your files.  They both also support mode `--yes` as well, which goes ahead and makes all modifications to your Beancount data, importing receipts into your Beancount folder and deleting them from the source.  Any exceptions processing receipts when using these two flags are printed (summarized) as they take place, and they are printed in detail at the end of the run; normally (in interactive mode), an exception interrupts the whole process at the first failure.
+`ingest`, `refine` and `associate` work interactively by default, but they support batch operation too.  They support flag `--no` which does all the work but never touches your files.  They all also support mode `--yes`, which goes ahead and makes all modifications to your Beancount data, importing receipts into your Beancount folder and deleting them from the source.  Any exceptions processing receipts when using these two flags are printed (summarized) as they take place, and they are printed in detail at the end of the run; normally (in interactive mode), an exception interrupts the whole process at the first failure.
 
 ### Naming convention for receipt files
 

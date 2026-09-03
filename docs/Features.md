@@ -65,22 +65,25 @@ transaction in its `document:` / `documentN:` metadata, the `refine` command
 uses that evidence to produce a more detailed and accurate version of the
 same transaction.
 
-For a transaction pointed at by file path and line number, the refinement:
+For one or more transactions pointed at by file path and line number (or a
+range of lines, which refines every transaction beginning within the range),
+the refinement:
 
-* Extracts the full transaction block (date, postings, metadata, inline
+* Extracts the full transaction block(s) (date, postings, metadata, inline
   comments), leaving all surrounding data untouched.
-* Reads each linked document (a local image or PDF file on disk next to
-  the Beancount data).
-* Sends the transaction text and the document images to the LLM together
-  with the account list.
+* For each transaction: reads each linked document (a local image or PDF
+  file on disk next to the Beancount data), and sends the transaction text
+  and the document images to the LLM together with the account list.
 * Asks the LLM to rewrite the transaction so that it is more complete
   (adding missing line items, splitting or correcting amounts, adding
   payment forms) and more accurate (clearer narration, corrected expense
-  accounts, a reconciled flag), while preserving everything already present
-  in the original.
-* Shows a diff and, on confirmation (or with `--yes`), rewrites only the
-  target transaction block's lines in the ledger file.  `--no` shows the
-  diff but modifies nothing.
+  accounts), while preserving everything already present in the original.
+* Shows a diff for each transaction and prompts the user to keep or skip
+  each refinement (or with `--yes`, keeps all of them); all kept
+  refinements are written to the ledger file in a single update at the
+  end.  `--clear` additionally sets the flag of every modified
+  transaction to the clear flag (`*`).  `--no` shows the diffs but
+  modifies nothing.
 
 The `document:` metadata tags are preserved unchanged, and the linked
 document files are read-only inputs — they are never moved or deleted.
