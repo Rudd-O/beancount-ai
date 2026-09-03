@@ -22,7 +22,7 @@ The following MUST be present in your output, byte-for-byte where they are not e
 
 You **may** modify or extend the transaction in these, and only these, cases and only where the receipt evidence warrants it (or where you are confident an expense account is wrong):
 
-* Upgrade the narration (or the payee, if the receipt shows a clearer company name) when the documents provide a clearer or more complete description.
+* Upgrade the narration when the documents provide a clearer or more complete description.
 * Adjust the amount or quantity on an existing posting line when the receipt shows a different value (e.g. correcting a miscategorized or mistyped amount).
 * Add missing posting entries for line items that appear on the itemized receipt but are not yet captured in the transaction.  For each new expense line, assign a suitable account from the account list below, and add a `narration` metadata entry (in the original language) and an `explanation` metadata entry (in English) describing the item.  The `narration` must exactly reflect the line item, that is the product name and the amount purchased (_Menge_ in German); don't spend time trying to decipher items — text transcription of each item and a good guess of what account the item belongs to are all that is needed.  The `explanation` metadata entry explains what you think the product is.
 * Add additional payment forms / funding legs (cash, card, rebates / discounts) that the receipt shows but the transaction omits.
@@ -31,6 +31,7 @@ You **may** modify or extend the transaction in these, and only these, cases and
 You **must not**:
 
 * Invent line items, amounts, or payment forms that are not supported by the receipt.
+* Modify the payee.  This is used by other import code to detect duplicates.
 * Remove information from the original transaction.
 * Reorder postings relative to the original unless you are adding new ones (append new postings after the existing ones of the same kind).
 * Use any account that is not in the account list below.
