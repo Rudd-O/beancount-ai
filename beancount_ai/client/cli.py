@@ -708,7 +708,6 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C9
                 break
             return  # 'n' -> abort without writing
 
-    assert new_content.endswith("\n")
     tx_file.write_text(new_content, encoding="utf-8")
     print(f"Updated transaction in {tx_file}", file=sys.stderr)
 
