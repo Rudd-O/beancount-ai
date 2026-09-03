@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
-from beancount_ai.client.cli import ImportResult
+from beancount_ai.client.commands.importcmd import ImportResult
 from beancount_ai.client.config import BeancountConfiguration
 
 # ===========================================================================

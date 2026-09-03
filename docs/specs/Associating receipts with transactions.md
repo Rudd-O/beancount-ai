@@ -30,7 +30,7 @@ Candidates are passed via stdin as hex-encoded JSON (standard qrexec transport).
 
 ### Client-side: `bean-ai associate` subcommand
 
-The client command flow (`do_associate` in `client/cli.py`):
+The client command flow (`run()`, with its inner `do_associate_one()`, in `client/commands/associate.py`):
 
 1. Lists unassociated receipts from server (or accepts specific filenames)
 2. For each receipt, calls `vm.help_associate_receipt(receipt)` which returns a raw `(cmd, proc, stdin, stdout)`
@@ -78,7 +78,7 @@ class CandidateContext:
     transaction_text: str   # full printer.format_entry output
 ```
 
-### Metadata insertion (`update_document_metadata` in `client/cli.py`)
+### Metadata insertion (`update_document_metadata` in `client/beanfiles.py:272`)
 
 - First existing doc entry (scanning from the date/payee line) is placed as `document:` (newest).
 - All existing doc entries renumbered sequentially as `document2:`, `document3:`, … (old numbering ignored — every prior doc preserved regardless of its original key name).
@@ -87,7 +87,7 @@ class CandidateContext:
 
 ### Date range
 
-Current code uses **-1 day before** to **+45 days after** receipt date (`client/cli.py:769-773`). The +45 window accounts for receipts paid up to a month later (late payments, delayed entries). This differs from the spec's original plan of ±2 days.
+Current code uses **-1 day before** to **+45 days after** receipt date (`client/commands/associate.py:90-93`). The +45 window accounts for receipts paid up to a month later (late payments, delayed entries). This differs from the spec's original plan of ±2 days.
 
 ### Ambiguity handling
 
@@ -97,7 +97,7 @@ Current behavior: **hard error** if `ambiguous=true` or `top_score < 0.8`:
 sorry, matches are ambiguous, cannot proceed; list of matches:<matches>
 ```
 
-The interactive candidate selection code (presentation + user input loop) exists in the source but is dead/stubbed out behind `return` at line 861 — commented as "will enable it in the future."
+The interactive candidate selection code (presentation + user input loop) exists in the source but is dead/stubbed out behind the exception/`return` in the ambiguity branch (`client/commands/associate.py:134-181`) — commented as "will enable it in the future."
 
 ### CLI flags
 
@@ -108,10 +108,6 @@ The interactive candidate selection code (presentation + user input loop) exists
 ### File organization
 
 Receipt destination path uses `predict_receipt_destination_path()`: format is `<beancount_folder>/<account_with_slashes_replaced_by_>/YYYY-MM-DD.<description — original_filename>`. The receipt folder is created with `mkdir(parents=True, exist_ok=True)`. Filenames are shortened to fit filesystem name limits via `shorten_fn()`.
-
-### Transaction discovery (`find_transaction_in_file`)
-
-Used when the LLM match result identifies a transaction by line_no + source_file. Searches for the transaction in the file by comparing stripped lines (skipping blanks). Returns 1-based line number or None if not found. If multiple transactions match the same text, an error is raised.
 
 ## File additions and modifications (matches implementation now)
 
@@ -127,7 +123,9 @@ Used when the LLM match result identifies a transaction by line_no + source_file
 
 | File | Changes |
 |---|---|
-| `beancount_ai/client/cli.py` | `associate` subcommand, `update_document_metadata()`, `find_transaction_in_file()`, `load_transaction_contexts()` client-side usage, `do_associate()` flow logic |
+| `beancount_ai/client/commands/associate.py` | `associate` subcommand (`run()` + inner `do_associate_one()`) flow logic: candidate usage, metadata update, receipt organization |
+| `beancount_ai/client/beanfiles.py` | `update_document_metadata()` (doc-metadata renumbering/insertion) used by the command |
+| `beancount_ai/client/beancount_loader.py` | `load_transactions()` / `load_transaction_contexts()` client-side usage |
 | `beancount_ai/server/commands/associate.py` | `beanai.HelpAssociateReceipt` handler (`run()`): two LLM passes (info + match), stdin candidate reading |
 
 ## Implementation order (actual, not planned)
@@ -137,8 +135,8 @@ The implementation was completed in this order:
 1. `RECEIPT_INFO_PROMPT.md` — extract date/amount from receipt image
 2. `RECEIPT_MATCH_PROMPT.md` — slimmed-down match prompt (reduced from ~50-100 lines to ~20 lines)
 3. `beancount_loader.py` — Beancount candidate loading (chose `beancount.loader` over manual regex)
-4. `do_help_associate_receipt()` (server) — single subcommand combining info + match passes
-5. `do_associate()` (client) — wiring candidates flow, metadata update, receipt organization
+4. `run()` handler in `server/commands/associate.py` — single subcommand combining info + match passes
+5. `run()` / `do_associate_one()` in `client/commands/associate.py` — wiring candidates flow, metadata update, receipt organization
 6. Ambiguous result handling stubbed out (not yet enabled)
 
 ## Edge cases handled in code

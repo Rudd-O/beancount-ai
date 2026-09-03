@@ -13,8 +13,8 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
-from beancount_ai.client import cli as client_cli
-from beancount_ai.client.cli import do_refine
+from beancount_ai.client import server as client_cli
+from beancount_ai.client.commands import refine
 from beancount_ai.client.config import BeancountConfiguration, Configuration
 
 ORIGINAL_BLOCK = (
@@ -115,7 +115,7 @@ def test_do_refine_writes_refined_block(
         clear=False,
     )
 
-    do_refine(cfg, args)
+    refine.run(cfg, args)
 
     new_content = (tmp_path / "main.bean").read_text(encoding="utf-8")
     assert '2026-03-15 ! "Coop Supermarket"' in new_content
@@ -151,7 +151,7 @@ def test_do_refine_no_flag_does_not_write(
         last_line_number=None,
         clear=False,
     )
-    do_refine(cfg, args)
+    refine.run(cfg, args)
     assert (tmp_path / "main.bean").read_text(encoding="utf-8") == original
     assert "--no requested" in capsys.readouterr().err
 
@@ -169,7 +169,7 @@ def test_do_refine_missing_file(
         clear=False,
     )
     with pytest.raises(SystemExit):
-        do_refine(cfg, args)
+        refine.run(cfg, args)
     assert "file not found" in capsys.readouterr().err
 
 
@@ -187,7 +187,7 @@ def test_do_refine_line_not_in_transaction(
         last_line_number=None,
         clear=False,
     )
-    do_refine(cfg, args)
+    refine.run(cfg, args)
     af = (tmp_path / "main.bean").read_text()
     assert b4 == af
 
@@ -208,7 +208,7 @@ def test_do_refine_malformed_llm_output(
         clear=False,
     )
     with pytest.raises(SystemExit):
-        do_refine(cfg, args)
+        refine.run(cfg, args)
     assert "could not parse LLM response" in capsys.readouterr().err
 
 
@@ -227,8 +227,8 @@ def test_do_refine_interactive_no(
         last_line_number=None,
         clear=False,
     )
-    with mock.patch.object(client_cli, "input", side_effect=["n"]):
-        do_refine(cfg, args)
+    with mock.patch.object(refine, "input", side_effect=["n"]):
+        refine.run(cfg, args)
     assert (tmp_path / "main.bean").read_text(encoding="utf-8") == original
 
 

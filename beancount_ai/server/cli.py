@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """bean-ai-server — qrexec RPC service for receipt processing (runs on VM with receipts).
 
-Subcommands:
-    list    List receipt filenames to import (JSON output)
-
 Config is read from ~/.config/bean-ai.json unless overridden.
 As a qrexec service, it reads nothing from stdin and only writes structured results to stdout.
 """
 
 import argparse
-from pathlib import Path
 
 from beancount_ai.server.commands import (
     associate,
@@ -21,15 +17,6 @@ from beancount_ai.server.commands import (
 )
 
 from .config import Configuration
-
-RECEIPT_CONVERSION_PROMPT_PATH = (
-    Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
-)
-
-# -- subcommands -----------------------------------------------------------
-
-
-# -- CLI -------------------------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,16 +31,16 @@ def build_parser() -> argparse.ArgumentParser:
         dest="conf_path",
         help="Path to the config file; overrides $BEAN_AI_CONFIG and the default",
     )
-
     sp = ap.add_subparsers(dest="command")
-
-    listcmds.subcommand_parser(sp)
-    process.subcommand_parser(sp)
-
-    fetch.subcommand_parser(sp)
-    associate.subcommand_parser(sp)
-    remove.subcommand_parser(sp)
-    refine.subcommand_parser(sp)
+    for p in [
+        listcmds.subcommand_parser,
+        process.subcommand_parser,
+        fetch.subcommand_parser,
+        associate.subcommand_parser,
+        remove.subcommand_parser,
+        refine.subcommand_parser,
+    ]:
+        sp = p(sp)
 
     return ap
 

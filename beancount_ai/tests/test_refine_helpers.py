@@ -9,7 +9,10 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
-from beancount_ai.client.cli import extract_document_paths, resolve_local_document_path
+from beancount_ai.client.beanfiles import (
+    extract_document_paths,
+    resolve_local_document_path,
+)
 
 
 def _lines(*s: str) -> list[str]:

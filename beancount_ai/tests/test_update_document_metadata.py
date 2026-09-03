@@ -7,7 +7,7 @@ import sys
 # Ensure parent dir is on path so we can import cli module directly.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
-from beancount_ai.client.cli import update_document_metadata
+from beancount_ai.client.beanfiles import update_document_metadata
 
 
 def _lines(*s: str) -> str:

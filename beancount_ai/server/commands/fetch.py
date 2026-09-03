@@ -2,16 +2,11 @@ import argparse
 import os
 import sys
 from functools import partial
-from pathlib import Path
 
 from webdav4.client import ResourceNotFound  # type:ignore
 
 from beancount_ai.server.config import Configuration, WebDAVDocumentSourcesConfiguration
 from beancount_ai.server.storage import WebDAVClient
-
-RECEIPT_CONVERSION_PROMPT_PATH = (
-    Path(__file__).resolve().parent / "RECEIPT_CONVERSION_PROMPT.md"
-)
 
 
 def run(cfg: Configuration, args: argparse.Namespace) -> None:

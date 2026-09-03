@@ -27,7 +27,7 @@ The client behaves as it does with other account file editing commands (e.g. `as
 
 ### Server-side: `beanai.Refine` subcommand
 
-The server's `do_refine()` handler performs the refine LLM pass:
+The server's `run()` handler (in `server/commands/refine.py`) performs the refine LLM pass:
 
 1. Reads **plain JSON** from stdin (standard qrexec transport): `transaction_text`, an `accounts` list, and a `documents` list (each with `filepath` and base64 `data`).
 2. Loads `TRANSACTION_REFINEMENT_PROMPT.md` at runtime and fills in the `{transaction_text}` and `{accounts}` placeholders; `TRANSACTION_REFINEMENT_PROMPT.md` will be very similar to `RECEIPT_CONVERSION_PROMPT.md`
@@ -48,11 +48,11 @@ bean-ai refine Documents/Accounting/00-beancount.bean 42 200          # every tr
 
 Each line number may point to **any line within a target transaction** (not only the date line); the helper walks back to the transaction start. The client calls `split_into_transactions_by_range(all_lines, first_line_number - 1, last_line_number - 1)` directly to extract the flagged blocks. Each flagged transaction block contains the exact raw text of the transaction (date line, indented postings, and the indented metadata block with `document:`/`documentN:` keys), including inline comments. Comment lines *above* the transaction are not part of the block — a comment preceding the date line travels in the non-transaction group that ends where the transaction starts, so the client sends only the transaction's own lines to the LLM; any comments the LLM adds to its output become part of the replacement block.
 
-The single-transaction convenience wrapper `split_at_transaction_by_line_number()` (`client/cli.py:442`) delegates to `split_into_transactions_by_range()` with `end_line = start_line` and returns `(before, tx_block, after)` — that is, all lines before, inside, and after the one flagged transaction.
+The single-transaction convenience wrapper `split_at_transaction_by_line_number()` (`client/beanfiles.py:209`) delegates to `split_into_transactions_by_range()` with `end_line = start_line` and returns `(before, tx_block, after)` — that is, all lines before, inside, and after the one flagged transaction.
 
 ### Linked document discovery
 
-The client scans `tx_block` lines for document metadata keys using the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (colon directly after the key, then a quoted path — matching both Beancount's `document: "path"` and the numbered `documentN:` forms, and consistent with `update_document_metadata()` in `client/cli.py:505`). All `document`, `document2`, … forms are captured. Extracted paths are client-local and resolved as relative to the folder containing the transaction file being read. Missing/unreadable files are a fail-stop error.
+The client scans `tx_block` lines for document metadata keys using the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (colon directly after the key, then a quoted path — matching both Beancount's `document: "path"` and the numbered `documentN:` forms, and consistent with `update_document_metadata()` in `client/beanfiles.py:272`). All `document`, `document2`, … forms are captured. Extracted paths are client-local and resolved as relative to the folder containing the transaction file being read. Missing/unreadable files are a fail-stop error.
 
 ### Prompt: TRANSACTION_REFINEMENT_PROMPT.md structure
 
@@ -76,7 +76,7 @@ The rewrite prompt is organized into these sections:
 
 The LLM does **not** change the transaction flag; the client's `--clear` option is what sets the flag of modified transactions to `*`.
 
-The prompt uses `{transaction_text}` as a placeholder for the original transaction block and `{accounts}` for the account listing (the server fills it in with `json.dumps(request["accounts"])`, exactly as `do_process` fills `{accounts}`). Documents are injected separately as base64 image parts (same mechanism as `do_process`), not as a placeholder. An example rewrite demonstrates adding missing line items, correcting amounts, and preserving the original header/metadata.
+The prompt uses `{transaction_text}` as a placeholder for the original transaction block and `{accounts}` for the account listing (the server fills it in with `json.dumps(request["accounts"])`, exactly as the `beanai.Process` handler fills `{accounts}`). Documents are injected separately as base64 image parts (same mechanism as `beanai.Process`), not as a placeholder. An example rewrite demonstrates adding missing line items, correcting amounts, and preserving the original header/metadata.
 
 ## Data structures
 
@@ -164,11 +164,11 @@ bean-ai refine <file_path> <first_line_number> [last_line_number] [--yes | --no]
 The client code must under no circumstances modify data other than the specific lines of the transactions being refined.  Fortunately the helper function `split_into_transactions_by_range()` goes a long way to help with that: the file is rebuilt by substituting the flagged blocks into the classified block list, so every line that belongs to a non-transaction block or to a transaction outside the range is carried over byte-for-byte.
 
 
-## Server-side flow (`do_refine`)
+## Server-side flow (`beanai.Refine`)
 
 ### Transport and input
 
-The server receives the `beanai.Refine` subcommand via qrexec or subprocess transport, **with no CLI argument** (unlike `beanai.Process`/`beanai.HelpAssociateReceipt`, which pass a hex-encoded filename as an argument — `do_refine` must therefore not reference `args.filename`). All payload data arrives on stdin as **plain JSON** (a single object — matching the transport convention where only the command argument, not stdin, is hex-encoded):
+The server receives the `beanai.Refine` subcommand via qrexec or subprocess transport, **with no CLI argument** (unlike `beanai.Process`/`beanai.HelpAssociateReceipt`, which pass a hex-encoded filename as an argument — the handler must therefore not reference `args.filename`). All payload data arrives on stdin as **plain JSON** (a single object — matching the transport convention where only the command argument, not stdin, is hex-encoded):
 
 ```python
 request_data = json.loads(sys.stdin.read())  # {"transaction_text": "...", "accounts": [...], "documents": [{"filepath": "...", "data": "<base64>"}, ...]}
@@ -186,11 +186,11 @@ request_data = json.loads(sys.stdin.read())  # {"transaction_text": "...", "acco
 5. Send to LLM alongside text prompt + all image parts
 6. Stream response back to client via JSONL (reasoning chunks + output chunks + a `finish` marker), the same protocol as `stream_reasoning_and_output()`
 
-## Client-side flow (`do_refine`)
+## Client-side flow (`bean-ai refine`)
 
-### Detailed steps in `do_refine(cfg, args)`
+### Detailed steps in `run(cfg, args)` (`client/commands/refine.py`)
 
-*There used to be pseudocode here, but it's no longer necessary since this is already implemented in `beancount_ai/client/cli.py:do_refine()`
+*There used to be pseudocode here, but it's no longer necessary since this is already implemented in `beancount_ai/client/commands/refine.py:run()`
 
 Notes on the operation of the function:
 
@@ -200,7 +200,7 @@ Notes on the operation of the function:
 
 ### Helper: `split_into_transactions_by_range(tx_lines, start_line, end_line=None)`
 
-The general-purpose building block that `split_at_transaction_by_line_number()` (in `client/cli.py:442`) delegates to. It classifies a Beancount document, over a requested line range, into a list of `(is_transaction, lines)` tuples (a `True` group runs of transaction lines, a `False` group runs of everything else), preserving the original line ordering and text exactly (flattening the groups back together reproduces the input byte-for-byte).
+The general-purpose building block that `split_at_transaction_by_line_number()` (in `client/beanfiles.py:209`) delegates to. It classifies a Beancount document, over a requested line range, into a list of `(is_transaction, lines)` tuples (a `True` group runs of transaction lines, a `False` group runs of everything else), preserving the original line ordering and text exactly (flattening the groups back together reproduces the input byte-for-byte).
 
 Arguments:
 - `tx_lines` — the document as a list of lines, keeping the line endings present in the source file.
@@ -209,11 +209,11 @@ Arguments:
 
 It raises `ValueError` for out-of-range or inverted ranges (`start_line`/`end_line` `< 0`, `>= len(tx_lines)`, or `end_line < start_line`), or when `tx_lines` is empty. Comments (indented or not) are not treated as part of a transaction except indented comment lines that sit between the transaction's date line and its last posting — those travel with the transaction.
 
-`do_refine` calls this function directly to refine several transactions across a line range in one pass instead of wrapping a single transaction; `split_at_transaction_by_line_number()` calls it with `end_line=None` for the single-transaction case.
+`run()` (in `client/commands/refine.py`) calls this function directly to refine several transactions across a line range in one pass instead of wrapping a single transaction; `split_at_transaction_by_line_number()` calls it with `end_line=None` for the single-transaction case.
 
 ### Helper: `extract_document_paths(tx_block: list[str]) -> list[str]`
 
-Scans lines of the transaction for document metadata entries matching the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (capture group 1 is the optional numeric suffix, group 2 is the quoted path). Returns the extracted paths as a deduplicated list preserving first-seen order. This matches Beancount's `document: "path"` and the numbered `documentN:` forms, and is consistent with the key form handled by `update_document_metadata()` in `client/cli.py:505`.
+Scans lines of the transaction for document metadata entries matching the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (capture group 1 is the optional numeric suffix, group 2 is the quoted path). Returns the extracted paths as a deduplicated list preserving first-seen order. This matches Beancount's `document: "path"` and the numbered `documentN:` forms, and is consistent with the key form handled by `update_document_metadata()` in `client/beanfiles.py:272`.
 
 ### Helper: `resolve_local_document_path(doc_path: str, tx_file: Path) -> Path`
 
@@ -245,7 +245,7 @@ Resolves a `document:` value to a client-local path: the path is interpreted as 
 | LLM call fails (network/auth/model error) | Emits JSON error line to stdout + `sys.exit(1)` (same as existing handlers) |
 | Empty document list after processing | No images sent — LLM only uses text prompt + original transaction block |
 | Transaction is malformed | LLM needs to decide what to do on its own |
-| Render failure on any PDF | Emits `error: ...` message to stderr + `sys.exit(1)` (same pattern as existing `do_process`) |
+| Render failure on any PDF | Emits `error: ...` message to stderr + `sys.exit(1)` (same pattern as the existing `beanai.Process` handler) |
 
 ### Prompt-side limitations:
 
@@ -284,14 +284,16 @@ Resolves a `document:` value to a client-local path: the path is interpreted as 
 | File | Changes |
 |---|---|
 | `beancount_ai/server/commands/refine.py` | Add `run()` handler and `TRANSACTION_REFINEMENT_PROMPT_PATH` constant; register `beanai.Refine` subcommand via `subcommand_parser()` (**with no positional argument**) and in the `dispatch` table |
-| `beancount_ai/client/cli.py` | Add `refine` subcommand in `build_parser()` with argparse entries for `<file_path>`, `<first_line_number>`, `[last_line_number]` (positional) and `--yes/--no` / `--clear`; add helpers `split_into_transactions_by_range()` (general transaction/non-transaction classifier over a line range), `split_at_transaction_by_line_number()` (thin single-transaction wrapper over it), `extract_document_paths()`, `resolve_local_document_path()`, `validate_refined_transaction()`, and `preview_local_document()`; add `do_refine()`, which runs a `do_refine_one` pass per flagged transaction (doc discovery → account-list read → plain-JSON stdin server call → validate → diff → interactive keep/skip) and writes the file once at the end; register `do_refine` in client `dispatch` dict |
+| `beancount_ai/client/commands/refine.py` | Add `run()` handler (runs a `do_refine_one` pass per flagged transaction: doc discovery → account-list read → plain-JSON stdin server call → validate → diff → interactive keep/skip, writing the file once at the end), helpers `validate_refined_transaction()` and `preview_local_document()`, and `subcommand_parser()` registering `bean-ai refine` with argparse entries for `<file_path>`, `<first_line_number>`, `[last_line_number]` (positional) and `--yes/--no` / `--clear` |
+| `beancount_ai/client/beanfiles.py` | Raw-file helpers used by the command: `split_into_transactions_by_range()` (general transaction/non-transaction classifier over a line range), `split_at_transaction_by_line_number()` (thin single-transaction wrapper over it), `extract_document_paths()`, and `resolve_local_document_path()` |
+| `beancount_ai/client/cli.py` | Register `bean-ai refine` in `build_parser()` via `commands.refine.subcommand_parser()` and `run` in the client `dispatch` dict |
 
 ### Implementation order (proposed)
 
 1. Write `TRANSACTION_REFINEMENT_PROMPT.md` — define preservation rules, modification instructions, and example rewrites first (with `{transaction_text}` and `{accounts}` placeholders, mirroring `RECEIPT_CONVERSION_PROMPT.md`)
-2. Server-side: implement `do_refine()` — read plain-JSON request from stdin, validate `transaction_text` (and each document's `filepath`/`data`), extension-check (warn + skip) + base64-decode + `file_to_image_parts()` each document, fill prompt placeholders, LLM call, stream output; register `beanai.Refine` (no argument) in `build_parser()` and `dispatch`
-3. Client-side helpers: `split_into_transactions_by_range()` (classify a file into transaction / non-transaction groups over a line range), `extract_document_paths()` (scan tx metadata for `document:`/`documentN:`) and `resolve_local_document_path()` (resolve relative to the tx file's directory)
-4. Client-side `do_refine()` wiring: file read → line-range validation → tx block extraction → per-transaction loop (doc discovery → read account list → plain-JSON stdin server call → parse + validate → reassemble + diff → interactive keep/skip) → single write at the end
+2. Server-side: implement the `beanai.Refine` handler (`run()` in `server/commands/refine.py`) — read plain-JSON request from stdin, validate `transaction_text` (and each document's `filepath`/`data`), extension-check (warn + skip) + base64-decode + `file_to_image_parts()` each document, fill prompt placeholders, LLM call, stream output; register `beanai.Refine` (no argument) in `build_parser()` and `dispatch`
+3. Client-side helpers: `split_into_transactions_by_range()` (classify a file into transaction / non-transaction groups over a line range), `extract_document_paths()` (scan tx metadata for `document:`/`documentN:`) and `resolve_local_document_path()` (resolve relative to the tx file's directory) — all in `client/beanfiles.py`
+4. Client-side `run()` wiring (`client/commands/refine.py`): file read → line-range validation → tx block extraction → per-transaction loop (doc discovery → read account list → plain-JSON stdin server call → parse + validate → reassemble + diff → interactive keep/skip) → single write at the end
 5. Client CLI arg parser entry in `build_parser()` with positional + optional args
 6. Register new subcommand in client's dispatch dict
 7. Add tests: unit tests for `extract_document_paths()` and `resolve_local_document_path()`, doctests for line-range validation, mock LLM response handling

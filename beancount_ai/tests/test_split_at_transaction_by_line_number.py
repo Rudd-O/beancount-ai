@@ -21,7 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from beancount_ai.client.cli import (
+from beancount_ai.client.beanfiles import (
     split_at_transaction_by_line_number,
     split_into_transactions_by_range,
 )

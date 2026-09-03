@@ -38,7 +38,7 @@ The `ingest` command only operates on `uningested` receipts. The `associate` com
 
 The server's `run()` handler (in `server/commands/process.py`) performs a **single LLM pass** using `RECEIPT_CONVERSION_PROMPT.md` (~146 lines):
 
-1. Reads account list from client via stdin: `read_accounts_and_close_stdin(sys.stdin)` parses JSON array of strings, strips leading/trailing whitespace and comments (lines starting with `;`) from each line, extracts first line via `splitlines()[0]`, and returns the cleaned list.
+1. Reads account list from client via stdin: `_read_accounts_and_close_stdin(sys.stdin)` (`server/commands/process.py:28`) parses JSON array of strings, strips leading/trailing whitespace and comments (lines starting with `;`) from each line, extracts first line via `splitlines()[0]`, and returns the cleaned list.
 2. Loads `RECEIPT_CONVERSION_PROMPT.md` at runtime and injects accounts dynamically: `prompt_text.format(accounts=json.dumps(account_lines))`. The `{accounts}` placeholder in lines 44 of the prompt is replaced with a JSON array of account strings (e.g., `["Assets:Cash:CHF", "Expenses:Food:Groceries"]`).
 3. Reads receipt image from WebDAV `uningested` folder via `WebDAVClient`.
 4. Converts PDF receipts to PNG images via `file_to_image_parts()` (reuses PDF→PNG logic).
@@ -52,7 +52,7 @@ The LLM prompt instructs the model to:
 
 The prompt includes a complete Beancount transaction example showing date format, flag (`!`), payee in double quotes, narration in double quotes, indented posting legs with two-space indent, metadata narration/explanation entries with four-space indent, and negative amounts for payment/income legs.
 
-## Client-side: `do_ingest()` function
+## Client-side: `bean-ai ingest` (`run()` in `client/commands/ingest.py`)
 
 ### Configuration: account list file
 
@@ -73,7 +73,7 @@ receipts = vm.list_receipts("uningested")
 
 If `args.filename` is provided, the receipt list is **overridden** — only specified filenames are processed (all must exist on server).
 
-### Per-receipt sub-flow (`do_ingest()` inner function)
+### Per-receipt sub-flow (`do_ingest_one()` inner function)
 
 **Per-receipt flow** (all enclosed in `with tempfile.TemporaryDirectory() as tmpdir`):
 
@@ -97,7 +97,7 @@ Interactive prompt: `\nImport proposed transaction based on '{receipt}'? [y/n/p/
 - `q`: `sys.exit(0)` immediately
 
 If action is `draft-import`: prints `"No files were changed."`, returns.
-If action is `import`: calls `imp.commit()`, then `do_remove()`. WebDAV removal failure triggers rollback of both the file append and receipt delete, raised as exception about failed remove.
+If action is `import`: calls `imp.commit()`, then `RemoteVM.remove_receipt()`. WebDAV removal failure triggers rollback of both the file append and receipt delete, raised as exception about failed remove.
 
 **ImportResult class structure:**
 
@@ -229,7 +229,7 @@ In interactive mode, a single failed receipt raises immediately. In batch mode (
 for receipt in receipts:
     ee = None
     try:
-        do_ingest(receipt)
+        do_ingest_one(receipt)
     except Exception as e:
         ee = e
         if args.yes or args.no:
@@ -270,7 +270,7 @@ When user presses `p` during interactive prompting, `_preview_receipt()` is call
 - **Transaction text empty or malformed after stripping**: No explicit validation — would fail during append but `ImportResult.__init__` wouldn't catch it.
 - **Rollback failure on both files**: Errors silently; receipt may exist as orphan on local filesystem if rollback truncation fails.
 - **Non-existent ingest file path**: Opens with `"a"` mode — creates the file if absent (no pre-check).
-- **Multiple items in payment_accounts list**: `do_process` takes only the first element (`payment_accounts[0]`) for description construction and receipt organization folder naming.
+- **Multiple items in payment_accounts list**: `RemoteVM.process_receipt()` takes only the first element (`payment_accounts[0]`) for description construction and receipt organization folder naming.
 
 ## Prompt: RECEIPT_CONVERSION_PROMPT.md structure (~146 lines)
 

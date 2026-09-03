@@ -26,9 +26,22 @@ beancount-ai/
 │   └── *_PROMPT.md                            # prompts for LLMs
 │
 └── beancount_ai/client/                       # Runs on client VM which has Beancount data
-    ├── cli.py                                 # list / ingest / import / associate / refine / … subcommands → calls server via qrexec/local
+    ├── cli.py                                 # bean-ai entry point: build_parser() + dispatch table
+    ├── commands/                              # one module per bean-ai subcommand
+    │   ├── listcmds.py                        # bean-ai list-uningested / list-unassociated
+    │   ├── ingest.py                          # bean-ai ingest
+    │   ├── importcmd.py                       # bean-ai import
+    │   ├── associate.py                       # bean-ai associate
+    │   ├── refine.py                          # bean-ai refine
+    │   ├── process.py                         # bean-ai process
+    │   ├── fetch.py                           # bean-ai fetch
+    │   ├── remove.py                          # bean-ai remove
+    │   └── organize.py                        # bean-ai organize
     ├── config.py                              # client-side configuration
-    └── beancount_loader.py                    # loads Beancount data
+    ├── beancount_loader.py                    # loads Beancount data (queries / candidate contexts)
+    ├── beanfiles.py                           # raw Beancount file ops: tx splitting, doc metadata, receipt organization
+    ├── server.py                              # qrexec/subprocess transport (RemoteVM) + LLM streaming capture
+    └── display.py                             # colored unified-diff printing
 ```
 
 Tox (`tox --current-env`) is the test framework, and it runs Ruff, MyPy and pytest.
