@@ -2,11 +2,28 @@
 
 ## Overview
 
-`bean-ai` imports scanned or photographed receipts into a Beancount accounting data set and organizes them coherently. Each receipt is processed by an LLM —local or cloud— to extract transaction details, converted into a Beancount transaction, and filed under the appropriate account folder with a `document:` metadata tag linking back to the receipt image.  Receipts for existing transactions can also be imported and associated with the `document:` tag to their corresponding transactions.
+`bean-ai` helps you manage your Beancount accounting data through AI —local or cloud, your choice— in several ways:
 
-This program imposes no dependency on cloud at all.  Furthermore, you do not need a harness like Codex or OpenClaw; you don't need MCP or any similar complication to use `bean-ai` either.  All you need is access to an OpenAI compatible model API, and your computer where you keep Beancount installed.  If you use a local model, you can keep your Beancount and receipt data 100% private.
+* It can import (scanned or photographed) receipts into a Beancount file and organize them coherently.
+  * The LLM processes your receipt to extract transaction details and convert it into a Beancount transaction.  `bean-ai` uses that information to file the receipt under the appropriate account folder, and to write the newly-created transaction (complete with `document:` metadata tag linking back to the filed receipt).
+* It can automatically associate transactions already in your Beancount files with your receipts.
+  * Each receipt is analyzed by the LLM to determine date / amount, then `bean-ai` queries Beancount for matching transactions; the LLM is then directed to identify the correct transaction among the search results.  Finally, `bean-ai` files the receipt appropriately, then adds the `document:` tag to the identified transaction, pointing to the filed receipt.
+* It can even help you refine transactions down to the line item.
+  * A transaction you identify (by file name and line number) will be submitted to the LLM, along with all its associated `document:`s, with instructions to enhance the transaction with all the factual detail present in the documents.  `bean-ai` then uses the response of the LLM to rewrite *only* that transaction in your Beancount file.
 
-You'll need an OpenAI-compatible LLM (private like Open-WebUI / Ollama or cloud like OpenAI) and an API key from your LLM service to be able to use this project.  Furthermore, whatever model you use needs to be capable of *vision*.  Additionally, in the current iteration of this project, the receipts storage backend only supports WebDAV -- in a future release, local files will be supported as well.
+This lets you have a comprehensive AI-assisted workflow where:
+
+* you continue to use your your favorite importers to import data like bank statements;
+* you can quickly add any receipts you scanned to the newly-imported data;
+* you can use those added receipts to enhance the imported transactions with lots of detail;
+* you can ingest any receipts corresponding to transactions not imported (e.g. cash);
+* all of this happens with very little intervention on your part — at best, you'll fix an LLM-made error here and there.
+
+This program imposes no dependency on cloud at all.  Furthermore, you do not need a harness like Codex or OpenClaw; you don't need MCP or any similar complication to use `bean-ai` either; the LLM is never given free / open access to your accounting data — it only ever sees the information that the current task requires, and it isn't allowed to touch anything else.  You *don't* need a frontier model for this — modest 30B parameter models do very well!
+
+*AI use:* You'll need an OpenAI-compatible LLM (private like Open-WebUI / Ollama or cloud like OpenAI) and an API key from your LLM service to be able to use this project.  Furthermore, whatever model you use needs to be capable of *vision*.  Note that, if you use a local (non-cloud) model, your Beancount and receipt data will always be 100% private.
+
+*Receipt source*: in the current iteration of this project, the receipts storage backend only supports WebDAV -- in a future release, local files will be supported as well.
 
 Bug reports, feature requests and pull requests are welcome!
 
@@ -40,7 +57,8 @@ bean-ai associate
 **Refine an existing transaction using its linked documents**:
 
 ```bash
-bean-ai refine <file_path> <line_number>   # rewrites that transaction based on its linked receipt(s)
+# rewrites that transaction on line number 157 based on its linked receipt(s)
+bean-ai refine Expenses.beancount 157 # <file_path> <line_number>
 ```
 
 Find a reference to all subcommands in the [Commands](docs/Commands.md) documentation.
@@ -49,7 +67,7 @@ Find a reference to all subcommands in the [Commands](docs/Commands.md) document
 
 ### Batch operation
 
-`ingest` and `associate` work interactively by default, but they support batch operation too.  They support flag `--no` which does all the work but never touches your files.  They both also support mode `--yes` as well, which goes ahead and makes all modifications to your Beancount data, importing receipts into your Beancount folder and deleting them from the source.  Any exceptions processing receipts when using these two flags are printed (summarized) as they take place, and they are printed in detail at the end of the run; normally (in interactive mode), an exception interrupts the whole process at the first failure.
+`ingest`, `refine` and `associate` work interactively by default, but they support batch operation too.  They support flag `--no` which does all the work but never touches your files.  They both also support mode `--yes` as well, which goes ahead and makes all modifications to your Beancount data, importing receipts into your Beancount folder and deleting them from the source.  Any exceptions processing receipts when using these two flags are printed (summarized) as they take place, and they are printed in detail at the end of the run; normally (in interactive mode), an exception interrupts the whole process at the first failure.
 
 ### Naming convention for receipt files
 
@@ -61,9 +79,10 @@ Imported receipts are saved under `<beancount_folder>/<account_with_slashes>/` w
 
 For example, `2026-07-15_Groceries — IMG_1234.jpg`.
 
-### LLMs known to do great work
+### LLMs tested and known to do great work
 
-* qwen3.5:35b-A3B through Ollama / Open-WebUI
+* qwen3.6-27b through Ollama / Open-WebUI: excellent results
+* qwen3.5:35b-A3B through Ollama / Open-WebUI: very good results
 
 ## Configuration
 
