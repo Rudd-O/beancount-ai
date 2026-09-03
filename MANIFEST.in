@@ -4,6 +4,7 @@ include docs/*
 include docs/*/*
 include beancount_ai/server/*.md
 include qubes-rpc/*
+include beancount_ai/tests/*.beancount
 include Makefile
 include README.md
 include mypy.ini
