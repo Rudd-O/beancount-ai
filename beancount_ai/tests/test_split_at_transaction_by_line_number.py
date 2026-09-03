@@ -425,44 +425,40 @@ def test_split_into_transactions_by_range_start_in_middle_of_transaction(
 class TestSplitByRangeValidation:
     """The helper rejects malformed ranges with ValueError before splitting."""
 
-    def test_negative_start(
-        self, beancount_lines: list[str]
-    ) -> None:
-        with pytest.raises(ValueError, match="starting line number .* cannot be less than zero"):
+    def test_negative_start(self, beancount_lines: list[str]) -> None:
+        with pytest.raises(
+            ValueError, match="starting line number .* cannot be less than zero"
+        ):
             split_into_transactions_by_range(beancount_lines, start_line=-1)
 
-    def test_negative_end(
-        self, beancount_lines: list[str]
-    ) -> None:
-        with pytest.raises(ValueError, match="ending line number .* cannot be less than zero"):
+    def test_negative_end(self, beancount_lines: list[str]) -> None:
+        with pytest.raises(
+            ValueError, match="ending line number .* cannot be less than zero"
+        ):
             split_into_transactions_by_range(beancount_lines, 0, -1)
 
-    def test_start_equal_to_len(
-        self, beancount_lines: list[str]
-    ) -> None:
-        with pytest.raises(ValueError, match="starting line number .* cannot be greater"):
+    def test_start_equal_to_len(self, beancount_lines: list[str]) -> None:
+        with pytest.raises(
+            ValueError, match="starting line number .* cannot be greater"
+        ):
             split_into_transactions_by_range(
                 beancount_lines, start_line=len(beancount_lines)
             )
 
-    def test_end_equal_to_len(
-        self, beancount_lines: list[str]
-    ) -> None:
+    def test_end_equal_to_len(self, beancount_lines: list[str]) -> None:
         with pytest.raises(ValueError, match="ending line number .* cannot be greater"):
             split_into_transactions_by_range(beancount_lines, 0, len(beancount_lines))
 
-    def test_end_beyond_len(
-        self, beancount_lines: list[str]
-    ) -> None:
+    def test_end_beyond_len(self, beancount_lines: list[str]) -> None:
         with pytest.raises(ValueError, match="ending line number .* cannot be greater"):
             split_into_transactions_by_range(
                 beancount_lines, 0, len(beancount_lines) + 5
             )
 
-    def test_end_before_start(
-        self, beancount_lines: list[str]
-    ) -> None:
-        with pytest.raises(ValueError, match="must be less than or equal than end_line"):
+    def test_end_before_start(self, beancount_lines: list[str]) -> None:
+        with pytest.raises(
+            ValueError, match="must be less than or equal than end_line"
+        ):
             split_into_transactions_by_range(beancount_lines, 5, 3)
 
     def test_empty_document(
@@ -503,7 +499,9 @@ class TestSplitByRangeSingle:
         self, beancount_lines: list[str]
     ) -> None:
         # Pointing at TX1's final posting still returns the whole TX1.
-        res = split_into_transactions_by_range(beancount_lines, TX_1_DATE + TX_1_LEN - 1)
+        res = split_into_transactions_by_range(
+            beancount_lines, TX_1_DATE + TX_1_LEN - 1
+        )
         tx = next(l for t, l in res if t)
         assert tx == beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]
 
@@ -534,22 +532,16 @@ class TestSplitByRangeNoTransaction:
     """A start line that is not part of any transaction yields a single
     non-transaction group spanning the whole document."""
 
-    def test_start_on_directive_first_line(
-        self, beancount_lines: list[str]
-    ) -> None:
+    def test_start_on_directive_first_line(self, beancount_lines: list[str]) -> None:
         res = split_into_transactions_by_range(beancount_lines, 0)
         assert res == [(False, list(beancount_lines))]
 
-    def test_start_on_section_comment(
-        self, beancount_lines: list[str]
-    ) -> None:
+    def test_start_on_section_comment(self, beancount_lines: list[str]) -> None:
         # index 37 = "; This red bull has been accounted for." (unindented comment)
         res = split_into_transactions_by_range(beancount_lines, 37)
         assert res == [(False, list(beancount_lines))]
 
-    def test_start_on_blank_gap_line(
-        self, beancount_lines: list[str]
-    ) -> None:
+    def test_start_on_blank_gap_line(self, beancount_lines: list[str]) -> None:
         # index 25 is the second blank line of the gap between TX1 and TX2.
         res = split_into_transactions_by_range(beancount_lines, 25)
         assert res == [(False, list(beancount_lines))]
@@ -614,9 +606,7 @@ class TestSplitByRangeEndLine:
         assert len(flagged) == 1
         assert flagged[0] == beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]
 
-    def test_end_inclusive_at_later_tx_start(
-        self, beancount_lines: list[str]
-    ) -> None:
+    def test_end_inclusive_at_later_tx_start(self, beancount_lines: list[str]) -> None:
         # With end exactly on TX2's date line, TX2 is now flagged.
         res = split_into_transactions_by_range(beancount_lines, 37, TX_3_DATE)
         tx = next(l for t, l in res if t)
@@ -638,9 +628,7 @@ class TestSplitByRangeEndLine:
 
 
 class TestSplitByRangeMultiple:
-    def test_range_spanning_three_tx_groups(
-        self, beancount_lines: list[str]
-    ) -> None:
+    def test_range_spanning_three_tx_groups(self, beancount_lines: list[str]) -> None:
         res = split_into_transactions_by_range(beancount_lines, TX_1_DATE, TX_3_DATE)
         assert len(res) == 7
         assert [t for t, _ in res] == [False, True, False, True, False, True, False]
@@ -685,27 +673,25 @@ class TestSplitByRangeMultiple:
 
 
 class TestSplitByRangeInvariants:
-    def test_groups_alternate(
-        self, beancount_lines: list[str]
-    ) -> None:
+    def test_groups_alternate(self, beancount_lines: list[str]) -> None:
         res = split_into_transactions_by_range(beancount_lines, TX_1_DATE, TX_3_DATE)
         flags = [t for t, _ in res]
         assert flags == [False, True, False, True, False, True, False]
         assert flags[0] is False
         assert all(a is not b for a, b in zip(flags, flags[1:]))
 
-    def test_flattening_reconstructs_document(
-        self, beancount_lines: list[str]
-    ) -> None:
+    def test_flattening_reconstructs_document(self, beancount_lines: list[str]) -> None:
         # Groups preserve the original lines verbatim and in order: rejoining
         # every line of every group reproduces the source byte-for-byte.
         source = "".join(beancount_lines)
-        for start, end in [
+        start: int
+        end: int | None
+        for start, end in [  # pyright: ignore[reportUnknownVariableType]
             (TX_1_DATE, None),
             (TX_1_DATE + 1, None),
             (TX_1_DATE, TX_6_LAST),
             (0, 0),
             (0, len(beancount_lines) - 1),
         ]:
-            res = split_into_transactions_by_range(beancount_lines, start, end)
+            res = split_into_transactions_by_range(beancount_lines, start, end)  # pyright: ignore[reportUnknownArgumentType]
             assert "".join(ln for _, grp in res for ln in grp) == source

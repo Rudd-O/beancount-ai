@@ -308,17 +308,17 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:
     from httpx import Client as HttpxClient
     from openwebui_client import OpenWebUIClient
 
-    request_data = json.loads(sys.stdin.read())
+    request_data_pre = json.loads(sys.stdin.read())
     if (
-        not isinstance(request_data, dict)
-        or "transaction_text" not in request_data
-        or not isinstance(request_data["transaction_text"], str)
-        or not request_data["transaction_text"].strip()
+        not isinstance(request_data_pre, dict)
+        or "transaction_text" not in request_data_pre
+        or not isinstance(request_data_pre["transaction_text"], str)
+        or not request_data_pre["transaction_text"].strip()
     ):
         print("error: Invalid request: missing transaction_text", file=sys.stderr)
         sys.exit(1)
 
-    request_data = cast(dict[Any, Any], request_data)
+    request_data: dict[Any, Any] = request_data_pre  # pyright: ignore[reportUnknownVariableType]
     if "documents" not in request_data:
         request_data["documents"] = []
     for dn, d in enumerate(cast(list[Any], request_data["documents"])):
@@ -337,9 +337,7 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:
     if (
         "accounts" not in request_data
         or not isinstance(request_data["accounts"], list)
-        or not all(
-            isinstance(acc, str) for acc in cast(list[Any], request_data["accounts"])
-        )
+        or not all(isinstance(acc, str) for acc in request_data["accounts"])  # pyright: ignore[reportUnknownVariableType]
     ):
         print(
             f"error: Invalid request: account list missing or invalid", file=sys.stderr
@@ -356,7 +354,10 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:
         fn = Path(doc["filepath"])
         suffix = fn.suffix.lower()
         if suffix not in _EXT:
-            print(f"warning: unsupported document format, skipping: {suffix}", file=sys.stderr)
+            print(
+                f"warning: unsupported document format, skipping: {suffix}",
+                file=sys.stderr,
+            )
             continue
         raw = base64.b64decode(doc["data"])
         image_parts.extend(file_to_image_parts(doc["filepath"], raw))
