@@ -15,7 +15,7 @@ The client invokes `beanai.Refine` on the backend, which takes from the client t
 The client flow per invocation:
 
 1. User points to an existing transaction by file path and 1-based line number (any line within the transaction)
-2. Program extracts the target transaction block using `split_at_transaction_by_line_number()` (already exists in `client/cli.py:306`)
+2. Program extracts the target transaction block using `split_at_transaction_by_line_number()` (already exists in `client/cli.py:442`), which delegates to `split_into_transactions_by_range()` (see below)
 3. Program scans the target transaction's metadata for `document:` keys (including `document2:`, `document3:`, etc.)
 4. For each linked document: read the file (client-local) and store in memory
 5. Client serializes `{"transaction_text": tx_block_text, "accounts": [...], "documents": [{"filepath": path, "data": base64}, ...]}` as **plain** JSON (not hex) and writes it to the server's stdin over the standard transport (qrexec or subprocess). The `beanai.Refine` command itself carries **no** hex-encoded argument — only stdin is used.
@@ -45,6 +45,8 @@ bean-ai refine Documents/Accounting/00-beancount.bean 42
 ```
 
 The line number may point to **any line within the target transaction** (not only the date line); the helper walks back to the transaction start. The client uses the existing `split_at_transaction_by_line_number(row_idx_zero_based, all_lines)` to extract `(before, tx_block, after)`. `tx_block` contains the exact raw text of the transaction (date line, indented postings, and the indented metadata block with `document:`/`documentN:` keys), including inline comments. Comment lines *above* the transaction are not part of the block and travel in `before` — therefore the client must send the original block to the LLM, and any new leading comments in the LLM's output are handled per "Client-side flow" below.
+
+`split_at_transaction_by_line_number()` is itself a thin wrapper over the more general `split_into_transactions_by_range()` (see below), which can flag any run of line ranges at once — the building block the *batch* version of `do_refine` will use to refine several transactions in one pass.
 
 ### Linked document discovery
 
@@ -297,9 +299,22 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:
     print(f"Updated transaction in {tx_file}", file=sys.stderr)
 ```
 
+### Helper: `split_into_transactions_by_range(tx_lines, start_line, end_line=None)`
+
+The general-purpose building block that `split_at_transaction_by_line_number()` (in `client/cli.py:442`) delegates to. It classifies a Beancount document, over a requested line range, into a list of `(is_transaction, lines)` tuples (a `True` group runs of transaction lines, a `False` group runs of everything else), preserving the original line ordering and text exactly (flattening the groups back together reproduces the input byte-for-byte).
+
+Arguments:
+- `tx_lines` — the document as a list of lines, keeping the line endings present in the source file.
+- `start_line` — zero-based index of the first line to consider. If it points into the middle of a transaction, the helper walks *backwards* to the transaction's start line and includes that whole transaction.
+- `end_line` — zero-based index of the last line at which a transaction may *begin*. A transaction starting at or before this index is included in whole (its body may run past the index); a transaction that begins after it is not flagged. When omitted, `end_line` defaults to `start_line`, so only the single transaction containing `start_line` is flagged and later transactions are left out.
+
+It raises `ValueError` for out-of-range or inverted ranges (`start_line`/`end_line` `< 0`, `>= len(tx_lines)`, or `end_line < start_line`), or when `tx_lines` is empty. Comments (indented or not) are not treated as part of a transaction except indented comment lines that sit between the transaction's date line and its last posting — those travel with the transaction.
+
+This function is what the *batch* version of `do_refine` will call directly to refine several transactions across a line range in one pass, instead of wrapping a single transaction.
+
 ### Helper: `extract_document_paths(tx_block: list[str]) -> list[str]`
 
-Scans lines of the transaction for document metadata entries matching the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (capture group 1 is the optional numeric suffix, group 2 is the quoted path). Returns the extracted paths as a deduplicated list preserving first-seen order. This matches Beancount's `document: "path"` and the numbered `documentN:` forms, and is consistent with the key form handled by `update_document_metadata()` in `client/cli.py:404`.
+Scans lines of the transaction for document metadata entries matching the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (capture group 1 is the optional numeric suffix, group 2 is the quoted path). Returns the extracted paths as a deduplicated list preserving first-seen order. This matches Beancount's `document: "path"` and the numbered `documentN:` forms, and is consistent with the key form handled by `update_document_metadata()` in `client/cli.py:505`.
 
 ### Helper: `resolve_local_document_path(doc_path: str, tx_file: Path, cfg: Configuration) -> Path`
 

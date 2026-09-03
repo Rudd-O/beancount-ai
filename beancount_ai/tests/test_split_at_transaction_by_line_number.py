@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Unit tests for split_at_transaction_by_line_number using example.beancount.
+"""Unit tests for split_at_transaction_by_line_number and
+split_into_transactions_by_range using example.beancount.
 
 The fixture reads ``tests/example.beancount`` so you can always look up which
 line number corresponds to what by opening the file in an editor.
@@ -14,12 +15,16 @@ File layout (lines are 1-based):
 
 import sys
 from pathlib import Path
+from typing import Iterable
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from beancount_ai.client.cli import split_at_transaction_by_line_number
+from beancount_ai.client.cli import (
+    split_at_transaction_by_line_number,
+    split_into_transactions_by_range,
+)
 
 # ---------------------------------------------------------------------------
 # Fixture: read example.beancount once, return (path, lines)
@@ -37,26 +42,27 @@ def beancount_lines() -> list[str]:
 
 # Helpers for readability. The numbers here are 0-based Python indices.
 # Cross-reference against beancount_ai/tests/example.beancount (1-based).
-TX_1_DATE: int = 19  # "Annual fee credit card" date line
-TX_1_TX: int = 20  # first metadata of TX1
-TX_1_ROOT: int = 23  # root-level metadata of TX1
+TX_1_DATE = 19  # "Annual fee credit card" date line
+TX_1_TX = 20  # first metadata of TX1
+TX_1_ROOT = 23  # root-level metadata of TX1
+TX_1_LEN = 5  # The transaction has five lines
 
-TX_2_DATE: int = 29  # "JOHN REIMBERG AARGAU" date line
-TX_2_TX: int = 30  # first tx account of TX2
-TX_2_DEEP: int = 33  # deep-metadate ("mailer") of TX2 (6-space indent)
+TX_2_DATE = 29  # "JOHN REIMBERG AARGAU" date line
+TX_2_TX = 30  # first tx account of TX2
+TX_2_DEEP = 33  # deep-metadate ("mailer") of TX2 (6-space indent)
 
-TX_3_DATE: int = 38  # "SELECTA AG ..." date line
-TX_3_TX: int = 39  # first tx account of TX3
+TX_3_DATE = 38  # "SELECTA AG ..." date line
+TX_3_TX = 39  # first tx account of TX3
 
-TX_4_DATE: int = 47  # "UBS ... PARKPLATZ" date line
-TX_4_TX: int = 48  # first tx account of TX4
+TX_4_DATE = 47  # "UBS ... PARKPLATZ" date line
+TX_4_TX = 48  # first tx account of TX4
 
-TX_5_DATE: int = 54  # "KAUFFMANISCHE DOM" date line
-TX_5_DEEP: int = 57  # deep metadata ("raw_string") of TX5
+TX_5_DATE = 54  # "KAUFFMANISCHE DOM" date line
+TX_5_DEEP = 57  # deep metadata ("raw_string") of TX5
 
-TX_6_DATE: int = 62  # "SELECTA AG DUSSELDORF" date line
-TX_6_DEEP: int = 65  # deep metadata ("raw_string") of TX6
-TX_6_LAST: int = 70  # last line of the transactino
+TX_6_DATE = 62  # "SELECTA AG DUSSELDORF" date line
+TX_6_DEEP = 65  # deep metadata ("raw_string") of TX6
+TX_6_LAST = 70  # last line of the transaction
 
 
 # ===========================================================================
@@ -119,12 +125,12 @@ class TestNegativeAndOobIndex:
             split_at_transaction_by_line_number(-1, beancount_lines)
 
     def test_exactly_len_raises(self, beancount_lines: list[str]) -> None:
-        n: int = len(beancount_lines)
+        n = len(beancount_lines)
         with pytest.raises(ValueError, match="cannot be greater"):
             split_at_transaction_by_line_number(n, beancount_lines)
 
     def test_beyond_len_raises(self, beancount_lines: list[str]) -> None:
-        n: int = len(beancount_lines) + 10
+        n = len(beancount_lines) + 10
         with pytest.raises(ValueError, match="cannot be greater"):
             split_at_transaction_by_line_number(n, beancount_lines)
 
@@ -390,3 +396,316 @@ class TestNumericButNotTx:
         # line 0 (an `open` directive), which isn't a tx. Raises.
         with pytest.raises(ValueError, match="does not point to a transaction"):
             split_at_transaction_by_line_number(1, beancount_lines)
+
+
+def _debug_split_into_transactions(res: Iterable[tuple[bool, list[str]]]) -> None:  # pyright: ignore[reportUnusedFunction]
+    for istran, lines in res:
+        sys.stderr.write("T  " if istran else "F  ")
+        for n, line in enumerate(lines):
+            if n > 0:
+                sys.stderr.write("   ")
+            sys.stderr.write(line)
+
+
+def test_split_into_transactions_by_range_start_in_middle_of_transaction(
+    beancount_lines: list[str],
+) -> None:
+    res = split_into_transactions_by_range(beancount_lines, start_line=TX_1_DATE + 1)
+    assert res[0][0] is False
+    assert len(res[0][1]) == TX_1_DATE
+    assert res[1][0] is True
+    assert len(res[1][1]) == TX_1_LEN
+
+
+# ===========================================================================
+# split_into_transactions_by_range — argument validation
+# ===========================================================================
+
+
+class TestSplitByRangeValidation:
+    """The helper rejects malformed ranges with ValueError before splitting."""
+
+    def test_negative_start(
+        self, beancount_lines: list[str]
+    ) -> None:
+        with pytest.raises(ValueError, match="starting line number .* cannot be less than zero"):
+            split_into_transactions_by_range(beancount_lines, start_line=-1)
+
+    def test_negative_end(
+        self, beancount_lines: list[str]
+    ) -> None:
+        with pytest.raises(ValueError, match="ending line number .* cannot be less than zero"):
+            split_into_transactions_by_range(beancount_lines, 0, -1)
+
+    def test_start_equal_to_len(
+        self, beancount_lines: list[str]
+    ) -> None:
+        with pytest.raises(ValueError, match="starting line number .* cannot be greater"):
+            split_into_transactions_by_range(
+                beancount_lines, start_line=len(beancount_lines)
+            )
+
+    def test_end_equal_to_len(
+        self, beancount_lines: list[str]
+    ) -> None:
+        with pytest.raises(ValueError, match="ending line number .* cannot be greater"):
+            split_into_transactions_by_range(beancount_lines, 0, len(beancount_lines))
+
+    def test_end_beyond_len(
+        self, beancount_lines: list[str]
+    ) -> None:
+        with pytest.raises(ValueError, match="ending line number .* cannot be greater"):
+            split_into_transactions_by_range(
+                beancount_lines, 0, len(beancount_lines) + 5
+            )
+
+    def test_end_before_start(
+        self, beancount_lines: list[str]
+    ) -> None:
+        with pytest.raises(ValueError, match="must be less than or equal than end_line"):
+            split_into_transactions_by_range(beancount_lines, 5, 3)
+
+    def test_empty_document(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError):
+            split_into_transactions_by_range([], 0)
+
+
+# ===========================================================================
+# split_into_transactions_by_range — single-transaction behaviour
+# ===========================================================================
+
+
+class TestSplitByRangeSingle:
+    """When end_line is omitted (defaults to start_line) only the transaction
+    containing start_line is flagged; everything else is non-transaction."""
+
+    def test_default_end_returns_containing_tx(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # start at TX1's date line.
+        res = split_into_transactions_by_range(beancount_lines, TX_1_DATE)
+        assert res == [
+            (False, beancount_lines[:TX_1_DATE]),
+            (True, beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]),
+            (False, beancount_lines[TX_1_DATE + TX_1_LEN :]),
+        ]
+
+    def test_explicit_end_equal_to_start_matches_default(
+        self, beancount_lines: list[str]
+    ) -> None:
+        assert split_into_transactions_by_range(beancount_lines, TX_1_DATE) == (
+            split_into_transactions_by_range(beancount_lines, TX_1_DATE, TX_1_DATE)
+        )
+
+    def test_start_on_last_line_of_tx_walks_back(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # Pointing at TX1's final posting still returns the whole TX1.
+        res = split_into_transactions_by_range(beancount_lines, TX_1_DATE + TX_1_LEN - 1)
+        tx = next(l for t, l in res if t)
+        assert tx == beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]
+
+    def test_start_deep_in_transaction_returns_same_tx(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # Deeply indented line of TX2 walks back to TX2's date line.
+        mid_res = split_into_transactions_by_range(beancount_lines, TX_2_DEEP)
+        date_res = split_into_transactions_by_range(beancount_lines, TX_2_DATE)
+        assert next(l for t, l in mid_res if t) == next(l for t, l in date_res if t)
+
+    def test_start_on_indented_comment_within_tx(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # An indented comment line counts as part of its enclosing transaction.
+        res = split_into_transactions_by_range(beancount_lines, 69)
+        tx = next(l for t, l in res if t)
+        assert tx[0] == beancount_lines[TX_6_DATE]
+        assert tx[-1] == beancount_lines[TX_6_LAST]
+
+
+# ===========================================================================
+# split_into_transactions_by_range — no-transaction starting points
+# ===========================================================================
+
+
+class TestSplitByRangeNoTransaction:
+    """A start line that is not part of any transaction yields a single
+    non-transaction group spanning the whole document."""
+
+    def test_start_on_directive_first_line(
+        self, beancount_lines: list[str]
+    ) -> None:
+        res = split_into_transactions_by_range(beancount_lines, 0)
+        assert res == [(False, list(beancount_lines))]
+
+    def test_start_on_section_comment(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # index 37 = "; This red bull has been accounted for." (unindented comment)
+        res = split_into_transactions_by_range(beancount_lines, 37)
+        assert res == [(False, list(beancount_lines))]
+
+    def test_start_on_blank_gap_line(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # index 25 is the second blank line of the gap between TX1 and TX2.
+        res = split_into_transactions_by_range(beancount_lines, 25)
+        assert res == [(False, list(beancount_lines))]
+
+    def test_balance_directive_inline_doc(
+        self,
+    ) -> None:
+        doc = [
+            "2030-01-01 balance Assets:Bank 0 CHF\n",
+            "2024-01-01 open Assets:Bank CHF\n",
+        ]
+        assert split_into_transactions_by_range(doc, 0) == [(False, list(doc))]
+
+    def test_directives_only_inline_doc(
+        self,
+    ) -> None:
+        doc = [
+            "2023-01-01 open Assets:Bank CHF\n",
+            "2030-01-01 balance Assets:Bank 0 CHF\n",
+        ]
+        assert split_into_transactions_by_range(doc, 0) == [(False, list(doc))]
+
+    def test_orphaned_indented_line_at_top(
+        self,
+    ) -> None:
+        # An indented line with no preceding transaction is not part of one.
+        doc = [
+            "  Expenses:Foo 1 CHF\n",
+            '2023-01-01 * "X"\n',
+            "  End:1 CHF\n",
+        ]
+        res = split_into_transactions_by_range(doc, 0, 0)
+        assert res == [(False, list(doc))]
+
+
+# ===========================================================================
+# split_into_transactions_by_range — range end semantics
+# ===========================================================================
+
+
+class TestSplitByRangeEndLine:
+    """end_line is the last index at which a transaction may *begin*; a
+    beginning transaction is always included whole (its body may run past it),
+    but a transaction that starts after end_line is not flagged."""
+
+    def test_end_inside_tx_body_includes_tx_whole(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # end lands mid-body of TX1; the whole TX1 is still returned intact.
+        for end in range(TX_1_DATE, TX_1_DATE + TX_1_LEN):
+            res = split_into_transactions_by_range(beancount_lines, TX_1_DATE, end)
+            tx = next(l for t, l in res if t)
+            assert tx == beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]
+
+    def test_end_excludes_later_tx_starting_after_it(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # end=19 lands on TX1's date line, so only TX1 is flagged; TX2 (date 29)
+        # starts after end and is excluded even though it follows later in the file.
+        res = split_into_transactions_by_range(beancount_lines, 0, TX_1_DATE)
+        flagged = [l for t, l in res if t]
+        assert len(flagged) == 1
+        assert flagged[0] == beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]
+
+    def test_end_inclusive_at_later_tx_start(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # With end exactly on TX2's date line, TX2 is now flagged.
+        res = split_into_transactions_by_range(beancount_lines, 37, TX_3_DATE)
+        tx = next(l for t, l in res if t)
+        assert tx[0] == beancount_lines[TX_3_DATE]
+
+    def test_default_end_does_not_flag_later_tx(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # Omitting end_line limits the result to the transaction containing
+        # start_line; later transactions (e.g. TX6 at the end of the file) stay
+        # non-transaction.
+        res = split_into_transactions_by_range(beancount_lines, TX_2_DATE)
+        assert sum(1 for t, _ in res if t) == 1
+
+
+# ===========================================================================
+# split_into_transactions_by_range — multiple transactions in a range
+# ===========================================================================
+
+
+class TestSplitByRangeMultiple:
+    def test_range_spanning_three_tx_groups(
+        self, beancount_lines: list[str]
+    ) -> None:
+        res = split_into_transactions_by_range(beancount_lines, TX_1_DATE, TX_3_DATE)
+        assert len(res) == 7
+        assert [t for t, _ in res] == [False, True, False, True, False, True, False]
+        # Each non-empty False group is exactly the gap / comment between the txs.
+        assert res[2][1] == beancount_lines[TX_1_DATE + TX_1_LEN : TX_2_DATE]
+        assert res[4][1] == [beancount_lines[37]]
+        # The three transaction groups are the intact txs.
+        assert res[1][1][0] == beancount_lines[TX_1_DATE]
+        assert res[3][1][0] == beancount_lines[TX_2_DATE]
+        assert res[5][1][0] == beancount_lines[TX_3_DATE]
+
+    def test_range_start_and_end_on_tx_date_lines(
+        self, beancount_lines: list[str]
+    ) -> None:
+        res = split_into_transactions_by_range(beancount_lines, TX_2_DATE, TX_4_DATE)
+        assert [t for t, _ in res] == [False, True, False, True, False, True, False]
+        dates = [l[0] for t, l in res if t]
+        assert dates == [
+            beancount_lines[TX_2_DATE],
+            beancount_lines[TX_3_DATE],
+            beancount_lines[TX_4_DATE],
+        ]
+
+    def test_adjacent_txs_no_separator_merge_into_one_group(
+        self,
+    ) -> None:
+        # No blank line between the two transactions, so groupby() coalesces
+        # them into a single True group.
+        doc = [
+            '2023-01-01 * "A"\n',
+            "  A:1 CHF\n",
+            '2023-01-02 * "B"\n',
+            "  B:1 CHF\n",
+        ]
+        res = split_into_transactions_by_range(doc, 0, 3)
+        assert res == [(True, list(doc))]
+
+
+# ===========================================================================
+# split_into_transactions_by_range — invariants
+# ===========================================================================
+
+
+class TestSplitByRangeInvariants:
+    def test_groups_alternate(
+        self, beancount_lines: list[str]
+    ) -> None:
+        res = split_into_transactions_by_range(beancount_lines, TX_1_DATE, TX_3_DATE)
+        flags = [t for t, _ in res]
+        assert flags == [False, True, False, True, False, True, False]
+        assert flags[0] is False
+        assert all(a is not b for a, b in zip(flags, flags[1:]))
+
+    def test_flattening_reconstructs_document(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # Groups preserve the original lines verbatim and in order: rejoining
+        # every line of every group reproduces the source byte-for-byte.
+        source = "".join(beancount_lines)
+        for start, end in [
+            (TX_1_DATE, None),
+            (TX_1_DATE + 1, None),
+            (TX_1_DATE, TX_6_LAST),
+            (0, 0),
+            (0, len(beancount_lines) - 1),
+        ]:
+            res = split_into_transactions_by_range(beancount_lines, start, end)
+            assert "".join(ln for _, grp in res for ln in grp) == source
