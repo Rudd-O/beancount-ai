@@ -54,3 +54,33 @@ metadata tag.  It may be worthwhile to explore replacing this `document:`
 tag (which usually points to an import data file) with the organized
 receipt, since the receipt is often more informative than the line of
 data that the import data file contains.
+
+## Refining existing transactions
+
+Transactions already recorded in the ledger may be incomplete or carry
+simplified / inaccurate posting detail (for example, a single line item
+covering the whole bill, a rough expense account, or an un-reconciled
+flag).  When a receipt or other source document is already linked to such a
+transaction in its `document:` / `documentN:` metadata, the `refine` command
+uses that evidence to produce a more detailed and accurate version of the
+same transaction.
+
+For a transaction pointed at by file path and line number, the refinement:
+
+* Extracts the full transaction block (date, postings, metadata, inline
+  comments), leaving all surrounding data untouched.
+* Reads each linked document (a local image or PDF file on disk next to
+  the Beancount data).
+* Sends the transaction text and the document images to the LLM together
+  with the account list.
+* Asks the LLM to rewrite the transaction so that it is more complete
+  (adding missing line items, splitting or correcting amounts, adding
+  payment forms) and more accurate (clearer narration, corrected expense
+  accounts, a reconciled flag), while preserving everything already present
+  in the original.
+* Shows a diff and, on confirmation (or with `--yes`), rewrites only the
+  target transaction block's lines in the ledger file.  `--no` shows the
+  diff but modifies nothing.
+
+The `document:` metadata tags are preserved unchanged, and the linked
+document files are read-only inputs — they are never moved or deleted.

@@ -47,11 +47,19 @@ Link a receipt to an existing Beancount transaction (for receipts from banks/mer
 |---|---|---|---|
 | `bean-ai associate` | `[--yes \| --no]` | `[<filename>]` | Associate one or more receipts with existing transactions. Without filenames, processes all unassociated receipts. With filenames, processes only those (they must exist). The flow: (1) LLM extracts date + amount from receipt; (2) queries Beancount for candidates within 1 day before to 45 days after receipt date; (3) LLM ranks candidates by match probability; (4) if unambiguous (score ≥ 0.8), auto-selects the top match; (5) inserts `document:` metadata on the transaction line (newest doc first, older docs renamed to `document2:`, `document3:`, etc.); (6) saves receipt under the appropriate account folder and removes it from WebDAV. With `--yes`: confirm all actions automatically. With `--no`: print diff only, skip writes. |
 
+### Refining existing transactions
+
+Rewrite an existing transaction using the documents already linked to it, to produce a more detailed / more accurate version while preserving the original detail.
+
+| Command | Flags | Arguments | Description |
+|---|---|---|---|
+| `bean-ai refine <file_path> <line_number>` | `[--yes \| --no]` | `<file_path> <line_number>` | Target a transaction by file path and a 1-based line number (any line *within* the transaction). The client extracts the transaction block, reads the documents linked in its `document:` / `documentN:` metadata (client-local, resolved relative to the file's directory or the Beancount data root), sends them to the server as plain JSON on stdin (the command carries no positional argument), and asks the LLM for a rewritten transaction. A colored diff is shown; then, depending on the flags / user answer, the target transaction block is rewritten in place (other lines untouched) or discarded. Interactive prompt: `y`es / `n`o / `p`review document / `q`uit. With `--yes`: apply without confirmation. With `--no`: do all the work and show the diff but touch no file. Exit 0 on success, non-zero on error (missing file, line out of range or not a transaction, unreadable document, LLM error, malformed LLM output). |
+
 ---
 
 ## bean-ai-server (server VM)
 
-Runs on the machine with receipts and LLM access. All subcommands accept filenames as **hex-encoded** positional arguments (encoded/decoded by the transport layer).
+Runs on the machine with receipts and LLM access. Most subcommands accept filenames as **hex-encoded** positional arguments (encoded/decoded by the transport layer); `beanai.Refine` is the exception — it takes no positional argument and receives its request as plain JSON on stdin.
 
 **Options:**
 
@@ -77,7 +85,13 @@ Lists filenames ending in `.jpg`, `.jpeg`, `.png`, or `.pdf`, sorted by modifica
 | `bean-ai-server beanai.Process <hex_filename>` | hex-encoded filename | Process a receipt with the LLM using `RECEIPT_CONVERSION_PROMPT.md`. PDFs are page-by-page rendered to PNG (via `pymupdf`, 300 DPI fallback). Emits streaming JSONL output. |
 | `bean-ai-server beanai.HelpAssociateReceipt <hex_filename>` | hex-encoded filename | Match a receipt against candidate transactions sent via stdin as JSON. Uses `RECEIPT_INFO_PROMPT.md` then `RECEIPT_MATCH_PROMPT.md`. Writes structured match results to stdout. |
 
-### JSONL output (Process and HelpAssociateReceipt)
+### Refining transactions
+
+| Command | Arguments | Description |
+|---|---|---|
+| `bean-ai-server beanai.Refine` | *(none)* | Refine an existing Beancount transaction using its linked documents. **No positional argument.** The request arrives on stdin as a single plain-JSON object: `{"transaction_text": ..., "accounts": [...], "documents": [{"filepath": ..., "data": <base64>}, ...]}`. Validations are fail-stop: the request must be a JSON object with a non-empty `transaction_text`; each document's extension must be one of `.jpg`, `.jpeg`, `.png`, `.pdf`. Documents are base64-decoded and turned into image parts (PDFs rendered to PNG page-by-page). Emits the same streaming JSONL output as `beanai.Process`. |
+
+### JSONL output (Process, HelpAssociateReceipt and Refine)
 
 | Delta type | Description |
 |---|---|
@@ -95,6 +109,16 @@ Each line is flushed immediately. Every 10 chunks the buffer is forcibly flushed
 4. Reads candidate transactions JSON from stdin
 5. Invokes LLM with image + candidates (`RECEIPT_MATCH_PROMPT.md`)
 6. Writes ranked match results to stdout as JSONL
+
+### Refine flow
+
+1. Reads the whole request (a single plain-JSON object) from stdin
+2. Validates `transaction_text` (non-empty) and each document's extension
+3. Base64-decodes each document and turns it into image parts (PDFs → PNG pages)
+4. Invokes the LLM once with the text prompt + all image parts (`TRANSACTION_REFINEMENT_PROMPT.md`, which embeds the original transaction under `{transaction_text}` and the account list under `{accounts}`)
+5. Streams the refined transaction back to the client as JSONL
+
+The client then shows a diff and, on confirmation, replaces only the target transaction block's lines in the file — `document:` metadata and every other part of the file are left untouched.
 
 ---
 

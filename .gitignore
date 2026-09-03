@@ -6,3 +6,5 @@ dist
 *.bean
 .tox
 __pycache__
+.mypy_cache
+
