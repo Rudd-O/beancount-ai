@@ -18,6 +18,7 @@ Generated from code review of all Python files under `beancount_ai`.
 
 ## 3. Transaction safety
 
+- **Beancount data lock** — functions on the client that attempt to edit data may trample on each other if accidentally invoked in parallel (e.g. from multiple terminals), potentially destroying data.  The mechanism we will use to prevent this (in effect, making multiple data-modification commands queue up one behind the other) is POSIX advisory file locking -- a method on the BeancountConfiguration class should be called that opens the main Beancount file for reading, then locks the file.  The locking should first be grabbed such that, if the lock is already grabbed by another process, a message is printed to standard error indicating that the Beancount data files are locked by another process, and the lock is attempted to be grabbed again, this time to lock indefinitely (hang) until the lock is released.  This method is to be called right at the beginning of any function, or at the latest right before reading any Beancount file.  In addition to this, any Beancount file writes should be flushed to disk, to improve data reliability.  It may even be worthwhile to attempt to grab the lock *right when the BeancountConfiguration object is instantiated* (keeping a reference to the open file alive in the class instance, so it doesn't get garbage-collected).
 - **Beancount file backup before editing** — `ImportResult.commit()` (`client/cli.py:923`) appends directly to the ingestion file via raw text manipulation, and `do_refine` / `do_associate_one` write `tx_file.write_text()` directly (`client/cli.py:839`, `client/cli.py:1515`). If the process crashes mid-write or produces malformed output, the ledger is corrupted with no recovery path. Add:
   - Write-to-temp + atomic rename (or `shutil.move` after validation).
   - Pre-edit backup (e.g., append `.bak-YYYYMMDD-HHMMSS`).
@@ -50,6 +51,7 @@ This project originally had a local file-based receipt backend but for expedienc
 
 | Priority | Item |
 |---|---|
+| High | Beancount data lock |
 | High | Beancount file edit safety — backup before edit + atomic write |
 | High | Un-comment / wire up the `associate` ambiguous match picker from the spec |
 | Medium | Config schema validation (missing keys, empty values) |
