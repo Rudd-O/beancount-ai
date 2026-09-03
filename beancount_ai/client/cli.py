@@ -659,143 +659,185 @@ def do_refine(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C9
     if not tx_file.exists():
         print(f"Error: file not found: {tx_file}", file=sys.stderr)
         sys.exit(1)
-    all_lines = tx_file.read_text(encoding="utf-8").splitlines(True)
+    original_lines = tx_file.read_text(encoding="utf-8").splitlines(True)
 
     # 2. Extract the transaction block, preserving all formatting.
     #    The helper takes a zero-based index and accepts any line within a tx.
     try:
-        before, tx_block, after = split_at_transaction_by_line_number(
-            args.line_number - 1, all_lines
+        blocks = split_into_transactions_by_range(
+            original_lines,
+            args.first_line_number - 1,
+            (None if args.last_line_number is None else args.last_line_number - 1),
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    tx_block_str = "".join(tx_block)  # exact original text
 
-    # 3. Discover linked documents (document / documentN metadata).
-    doc_paths = extract_document_paths(tx_block)
+    def collapse_blocks_into_lines(blocks: list[tuple[bool, list[str]]]) -> list[str]:
+        lns: list[str] = []
+        for _, block in blocks:
+            lns.extend(block)
+        return lns
 
-    # 4. Collect document contents (client-local, resolved near the tx file).
-    documents_data: list[RefineRequestDocument] = []
-    for doc_path in doc_paths:
-        resolved = resolve_local_document_path(doc_path, tx_file)
-        try:
-            raw = resolved.read_bytes()
-        except FileNotFoundError:
-            print(f"Error: linked document not found: {doc_path}", file=sys.stderr)
-            sys.exit(1)
-        documents_data.append(
-            RefineRequestDocument(
-                filepath=doc_path,
-                data=base64.b64encode(raw).decode("ascii"),
+    def do_refine_one(block_index: int, blocks: list[tuple[bool, list[str]]]) -> None:  # noqa: C901
+        """
+        Attempt to refine the supplied transaction.
+
+        If user accepts the refinement, the block corresponding to the
+        block index is modified. Else nothing happens.  If the user EOFs
+        or chooses to quit, we simply exit the program.
+        """
+        # 3. Discover linked documents (document / documentN metadata).
+        tx_block = blocks[block_index][1]
+        print(
+            f"Refining transaction {repr(tx_block[0].strip())} in file {tx_file}",
+            file=sys.stderr,
+        )
+
+        doc_paths = extract_document_paths(tx_block)
+
+        # 4. Collect document contents (client-local, resolved near the tx file).
+        documents_data: list[RefineRequestDocument] = []
+        for doc_path in doc_paths:
+            resolved = resolve_local_document_path(doc_path, tx_file)
+            try:
+                raw = resolved.read_bytes()
+            except FileNotFoundError:
+                print(f"Error: linked document not found: {doc_path}", file=sys.stderr)
+                sys.exit(1)
+            documents_data.append(
+                RefineRequestDocument(
+                    filepath=doc_path,
+                    data=base64.b64encode(raw).decode("ascii"),
+                )
             )
-        )
 
-    # 5. Call the server — plain-JSON payload on stdin (no command argument).
-    vm = RemoteVM.from_cfg(cfg)
-    try:
-        cmd, proc, stdin, stdout = vm.refine()
-    except subprocess.CalledProcessError as e:
-        raise Exception(f"Error refining receipt: {e}") from e
+        # 5. Call the server — plain-JSON payload on stdin (no command argument).
+        vm = RemoteVM.from_cfg(cfg)
+        try:
+            cmd, proc, stdin, stdout = vm.refine()
+        except subprocess.CalledProcessError as e:
+            raise Exception(f"Error refining receipt: {e}") from e
 
-    accounts = cfg.beancount.account_list_file.read_text(encoding="utf-8").splitlines()
+        accounts = cfg.beancount.account_list_file.read_text(
+            encoding="utf-8"
+        ).splitlines()
 
-    request_payload: RefineRequest = {
-        "transaction_text": tx_block_str,
-        "accounts": accounts,
-        "documents": documents_data,
-    }
-    stdin.write(json.dumps(request_payload).encode("utf-8"))
-    stdin.flush()
-    stdin.close()
+        request_payload: RefineRequest = {
+            "transaction_text": "".join(tx_block),
+            "accounts": accounts,
+            "documents": documents_data,
+        }
+        stdin.write(json.dumps(request_payload).encode("utf-8"))
+        stdin.flush()
+        stdin.close()
 
-    llm_output = stream_reasoning_and_capture_output(stdout)
-    stdout.close()
+        llm_output = stream_reasoning_and_capture_output(stdout)
+        stdout.close()
 
-    ret = proc.wait()
-    if ret != 0:
-        raise subprocess.CalledProcessError(ret, cmd)
+        ret = proc.wait()
+        if ret != 0:
+            raise subprocess.CalledProcessError(ret, cmd)
 
-    # 6. Parse the response — strip any markdown fences, then parse JSON.
-    llm_output = demarkdownify(llm_output).strip()
-    try:
-        resp = load_json(llm_output)
-        rewritten_tx_raw = cast(str, resp["transaction"])
-    except Exception:
-        print(
-            "Error: could not parse LLM response as JSON. Raw output:",
-            file=sys.stderr,
-        )
-        print(llm_output, file=sys.stderr)
-        sys.exit(1)
+        # 6. Parse the response — strip any markdown fences, then parse JSON.
+        llm_output = demarkdownify(llm_output).strip()
+        try:
+            resp = load_json(llm_output)
+            rewritten_tx_raw = cast(str, resp["transaction"])
+        except Exception:
+            print(
+                "Error: could not parse LLM response as JSON. Raw output:",
+                file=sys.stderr,
+            )
+            print(llm_output, file=sys.stderr)
+            sys.exit(1)
 
-    # We will not delete comments, either sent by the user in the original
-    # transaction and returning to us, or inserted by the LLM.
-    lines = rewritten_tx_raw.splitlines(True)
-    rewritten_tx = "".join(lines).rstrip("\n") + "\n"
+        # We will not delete comments, either sent by the user in the original
+        # transaction and returning to us, or inserted by the LLM.
+        lines = rewritten_tx_raw.splitlines(True)
+        rewritten_tx = "".join(lines).rstrip("\n") + "\n"
 
-    if not validate_refined_transaction(rewritten_tx):
-        print(
-            "Error: LLM returned a malformed transaction (no header / "
-            "fewer than two postings). Raw output:",
-            file=sys.stderr,
-        )
-        print(llm_output, file=sys.stderr)
-        sys.exit(1)
+        if not validate_refined_transaction(rewritten_tx):
+            print(
+                "Error: LLM returned a malformed transaction (no header / "
+                "fewer than two postings). Raw output:",
+                file=sys.stderr,
+            )
+            print(llm_output, file=sys.stderr)
+            sys.exit(1)
 
-    # 7. Reassemble the file with only the target block replaced.
-    new_lines = (
-        before
-        + [
+        # 7. Reassemble the file with only the target block replaced.
+        new_tx_block: list[str] = [
             ln if ln.endswith("\n") else ln + "\n"
             for ln in rewritten_tx.splitlines(True)
         ]
-        + after
-    )
-    new_content = "".join(new_lines)
 
-    diff = list(
-        difflib.unified_diff(
-            all_lines,
-            new_lines,
-            fromfile=str(tx_file),
-            tofile=str(tx_file),
-            n=5,
+        if args.clear and "".join(new_tx_block).strip() != "".join(tx_block).strip():
+            # Transaction is different, and user requested the cleared flag be used.
+            firstlnfields = new_tx_block[0].split(" ")
+            firstlnfields[1] = "*"
+            new_tx_block[0] = " ".join(firstlnfields)
+
+        original_lines = collapse_blocks_into_lines(blocks)
+        new_blocks = blocks[:]
+        new_blocks[block_index] = (new_blocks[block_index][0], new_tx_block)
+        new_lines = collapse_blocks_into_lines(new_blocks)
+
+        diff = list(
+            difflib.unified_diff(
+                original_lines,
+                new_lines,
+                fromfile=str(tx_file),
+                tofile=str(tx_file),
+                n=5,
+            )
         )
-    )
-    if diff:
-        print_diff(diff)
-    else:
-        print(f"No changes to {tx_file}", file=sys.stderr)
-        return
+        if diff:
+            print_diff(diff)
+        else:
+            print(f"No changes to {tx_file}", file=sys.stderr)
+            return
 
-    # 8. Prompt for / perform the write.
-    if args.no:
-        print(f"Skipping changes to {tx_file} (--no requested)", file=sys.stderr)
-        return
+        # 8. Prompt for / perform the write.
+        if args.no:
+            print(f"Skipping changes to {tx_file} (--no requested)", file=sys.stderr)
+            return
 
-    if not args.yes:
+        if args.yes:
+            blocks[block_index] = (blocks[block_index][0], new_tx_block)
+            return
+
         while True:
             print(
-                f"\nApply refined transaction to '{tx_file}'? [y]es / [n]o / [p]review document / [q]uit ",
+                f"\nApply refined transaction to {tx_file}? [y]es / [n]o / [p]review document / [q]uit ",
                 file=sys.stderr,
                 end="",
             )
             try:
                 answer = input().strip().lower()
             except EOFError:
-                return
+                sys.exit(0)
             if answer == "q":
                 sys.exit(0)
+            if answer == "n":
+                break
             if answer == "p" and documents_data:
                 preview_local_document(documents_data[0]["filepath"], tx_file, cfg)
                 continue
             if answer == "y":
+                blocks[block_index] = (blocks[block_index][0], new_tx_block)
                 break
-            return  # 'n' -> abort without writing
 
-    tx_file.write_text(new_content, encoding="utf-8")
-    print(f"Updated transaction in {tx_file}", file=sys.stderr)
+    for bn, (is_transaction, _) in enumerate(blocks):
+        if is_transaction:
+            do_refine_one(bn, blocks)
+
+    new_lines = collapse_blocks_into_lines(blocks)
+
+    if new_lines != original_lines:
+        new_text = "".join(new_lines)
+        tx_file.write_text(new_text, encoding="utf-8")
+        print(f"Updated transactions in {tx_file}", file=sys.stderr)
 
 
 class ImportResult:
@@ -1604,16 +1646,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     refine_cmd = sp.add_parser(
-        "refine", help="Refine an existing transaction using its linked documents"
+        "refine",
+        help="Refine one or more existing transactions using its linked documents",
     )
     refine_cmd.add_argument(
         "file_path",
-        help="Path to the Beancount file containing the target transaction",
+        help="Path to the Beancount file containing the transactions to refifne",
     )
     refine_cmd.add_argument(
-        "line_number",
-        help="1-based line number of any line within the target transaction",
+        "first_line_number",
+        help="line number (starts at 1) of any line of the first transaction you want to refine",
         type=int,
+    )
+    refine_cmd.add_argument(
+        "last_line_number",
+        help="line number of any line of the last transaction you want to refine",
+        type=int,
+        nargs="?",
+        default=None,
+    )
+    refine_cmd.add_argument(
+        "--clear",
+        "-c",
+        action="store_true",
+        default=False,
+        dest="clear",
+        help="Update the flag of every modified transaction to the clear flag (*)",
     )
     yes_group = refine_cmd.add_mutually_exclusive_group()
     yes_group.add_argument(
@@ -1622,7 +1680,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         dest="yes",
-        help="Apply the modification without confirmation",
+        help="Save the refinements without confirmation",
     )
     yes_group.add_argument(
         "--no",
@@ -1630,7 +1688,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         dest="no",
-        help="Do all the work (fetch documents, call the LLM, show the diff) but don't touch any file",
+        help="Simulate and display the refinements but don't touch the transaction file",
     )
 
     return ap

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Integration-style tests for the client's do_refine (LLM/VM interactions mocked)."""
 
+import argparse
 import io
 import json
 import pathlib
@@ -105,8 +106,13 @@ def test_do_refine_writes_refined_block(
     fake_call["llm_output"] = json.dumps(
         {"transaction": REFINED_BLOCK, "changes_summary": "split expenses"}
     )
-    args = mock.Mock(
-        file_path=str(tmp_path / "main.bean"), line_number=2, yes=True, no=False
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "main.bean"),
+        first_line_number=2,
+        yes=True,
+        no=False,
+        last_line_number=None,
+        clear=False,
     )
 
     do_refine(cfg, args)
@@ -137,8 +143,13 @@ def test_do_refine_no_flag_does_not_write(
     cfg = _make_config(tmp_path)
     fake_call["llm_output"] = json.dumps({"transaction": REFINED_BLOCK})
     original = (tmp_path / "main.bean").read_text(encoding="utf-8")
-    args = mock.Mock(
-        file_path=str(tmp_path / "main.bean"), line_number=2, yes=False, no=True
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "main.bean"),
+        first_line_number=2,
+        yes=False,
+        no=True,
+        last_line_number=None,
+        clear=False,
     )
     do_refine(cfg, args)
     assert (tmp_path / "main.bean").read_text(encoding="utf-8") == original
@@ -149,8 +160,13 @@ def test_do_refine_missing_file(
     tmp_path: pathlib.Path, capsys: "pytest.CaptureFixture[str]"
 ) -> None:
     cfg = _make_config(tmp_path)
-    args = mock.Mock(
-        file_path=str(tmp_path / "nope.bean"), line_number=1, yes=True, no=False
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "nope.bean"),
+        first_line_number=1,
+        yes=True,
+        no=False,
+        last_line_number=None,
+        clear=False,
     )
     with pytest.raises(SystemExit):
         do_refine(cfg, args)
@@ -162,12 +178,18 @@ def test_do_refine_line_not_in_transaction(
 ) -> None:
     cfg = _make_config(tmp_path)
     # Line 1 is the comment header, not part of any transaction.
-    args = mock.Mock(
-        file_path=str(tmp_path / "main.bean"), line_number=1, yes=True, no=False
+    b4 = (tmp_path / "main.bean").read_text()
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "main.bean"),
+        first_line_number=1,
+        yes=True,
+        no=False,
+        last_line_number=None,
+        clear=False,
     )
-    with pytest.raises(SystemExit):
-        do_refine(cfg, args)
-    assert "Error" in capsys.readouterr().err
+    do_refine(cfg, args)
+    af = (tmp_path / "main.bean").read_text()
+    assert b4 == af
 
 
 def test_do_refine_malformed_llm_output(
@@ -177,8 +199,13 @@ def test_do_refine_malformed_llm_output(
 ) -> None:
     cfg = _make_config(tmp_path)
     fake_call["llm_output"] = "not json at all"
-    args = mock.Mock(
-        file_path=str(tmp_path / "main.bean"), line_number=2, yes=True, no=False
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "main.bean"),
+        first_line_number=2,
+        yes=True,
+        no=False,
+        last_line_number=None,
+        clear=False,
     )
     with pytest.raises(SystemExit):
         do_refine(cfg, args)
@@ -192,8 +219,13 @@ def test_do_refine_interactive_no(
     cfg = _make_config(tmp_path)
     fake_call["llm_output"] = json.dumps({"transaction": REFINED_BLOCK})
     original = (tmp_path / "main.bean").read_text(encoding="utf-8")
-    args = mock.Mock(
-        file_path=str(tmp_path / "main.bean"), line_number=2, yes=False, no=False
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "main.bean"),
+        first_line_number=2,
+        yes=False,
+        no=False,
+        last_line_number=None,
+        clear=False,
     )
     with mock.patch.object(client_cli, "input", side_effect=["n"]):
         do_refine(cfg, args)

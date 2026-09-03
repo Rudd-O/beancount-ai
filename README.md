@@ -59,6 +59,9 @@ bean-ai associate
 ```bash
 # rewrites that transaction on line number 157 based on its linked receipt(s)
 bean-ai refine Expenses.beancount 157 # <file_path> <line_number>
+# or batch refinement, rewrites multiple transactions between two lines
+bean-ai refine Expenses.beancount 157 408 # <file_path> <first_line_number> <last_line_number>
+
 ```
 
 Find a reference to all subcommands in the [Commands](docs/Commands.md) documentation.
