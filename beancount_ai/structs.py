@@ -1,4 +1,5 @@
 from typing import TypedDict
+import datetime
 
 
 class RefineRequestDocument(TypedDict):
@@ -14,3 +15,9 @@ class RefineRequest(TypedDict):
     transaction_text: str
     accounts: list[str]
     documents: list[RefineRequestDocument]
+
+
+class ItemListing(TypedDict):
+    name: str
+    content_length: int | None
+    modified: datetime.datetime

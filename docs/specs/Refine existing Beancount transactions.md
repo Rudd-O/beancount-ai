@@ -283,7 +283,7 @@ Resolves a `document:` value to a client-local path: the path is interpreted as 
 
 | File | Changes |
 |---|---|
-| `beancount_ai/server/cli.py` | Add `do_refine()` handler; add `TRANSACTION_REFINEMENT_PROMPT_PATH` constant; register `beanai.Refine` in `build_parser()` (**with no positional argument**) and `dispatch` table |
+| `beancount_ai/server/commands/refine.py` | Add `run()` handler and `TRANSACTION_REFINEMENT_PROMPT_PATH` constant; register `beanai.Refine` subcommand via `subcommand_parser()` (**with no positional argument**) and in the `dispatch` table |
 | `beancount_ai/client/cli.py` | Add `refine` subcommand in `build_parser()` with argparse entries for `<file_path>`, `<first_line_number>`, `[last_line_number]` (positional) and `--yes/--no` / `--clear`; add helpers `split_into_transactions_by_range()` (general transaction/non-transaction classifier over a line range), `split_at_transaction_by_line_number()` (thin single-transaction wrapper over it), `extract_document_paths()`, `resolve_local_document_path()`, `validate_refined_transaction()`, and `preview_local_document()`; add `do_refine()`, which runs a `do_refine_one` pass per flagged transaction (doc discovery → account-list read → plain-JSON stdin server call → validate → diff → interactive keep/skip) and writes the file once at the end; register `do_refine` in client `dispatch` dict |
 
 ### Implementation order (proposed)

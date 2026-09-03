@@ -36,7 +36,7 @@ The `ingest` command only operates on `uningested` receipts. The `associate` com
 
 ## Server-side: `beanai.Process` subcommand
 
-The server's `do_process()` handler (in `server/cli.py`) performs a **single LLM pass** using `RECEIPT_CONVERSION_PROMPT.md` (~146 lines):
+The server's `run()` handler (in `server/commands/process.py`) performs a **single LLM pass** using `RECEIPT_CONVERSION_PROMPT.md` (~146 lines):
 
 1. Reads account list from client via stdin: `read_accounts_and_close_stdin(sys.stdin)` parses JSON array of strings, strips leading/trailing whitespace and comments (lines starting with `;`) from each line, extracts first line via `splitlines()[0]`, and returns the cleaned list.
 2. Loads `RECEIPT_CONVERSION_PROMPT.md` at runtime and injects accounts dynamically: `prompt_text.format(accounts=json.dumps(account_lines))`. The `{accounts}` placeholder in lines 44 of the prompt is replaced with a JSON array of account strings (e.g., `["Assets:Cash:CHF", "Expenses:Food:Groceries"]`).

@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
-from beancount_ai.server import cli as server_cli
+from beancount_ai.server.commands.refine import run as do_refine
 
 
 def _fake_cfg() -> mock.MagicMock:
@@ -35,7 +35,7 @@ def _run(stdin_text: str) -> int | None:
     """
     with mock.patch.object(sys, "stdin", io.StringIO(stdin_text)):
         try:
-            server_cli.do_refine(_fake_cfg(), mock.MagicMock())
+            do_refine(_fake_cfg(), mock.MagicMock())
             return None
         except SystemExit as e:
             return cast(int, e.code)
@@ -70,7 +70,7 @@ def test_unsupported_document_extension_skipped(
     ):
         try:
             with mock.patch.object(sys, "stdin", io.StringIO(stdin_text)):
-                server_cli.do_refine(_fake_cfg(), mock.MagicMock())
+                do_refine(_fake_cfg(), mock.MagicMock())
             pytest.fail(
                 "do_refine should have raised RuntimeError (LLM client reached)"
             )

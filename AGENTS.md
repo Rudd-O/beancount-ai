@@ -11,8 +11,17 @@ beancount-ai/
 ├── beancount_ai/structs.py                    # request/response TypedDicts shared by client and server
 │
 ├── beancount_ai/server/                       # Runs on server VM which has access to receipts and LLM
-│   ├── cli.py                                 # beanai.* subcommands (Fetch, Remove, Process, Refine, …)
+│   ├── cli.py                                 # bean-ai-server entry point: build_parser() + dispatch table
+│   ├── commands/                              # one module per beanai.* subcommand
+│   │   ├── listcmds.py                        # beanai.ListUningested / beanai.ListUnassociated
+│   │   ├── process.py                         # beanai.Process
+│   │   ├── fetch.py                           # beanai.Fetch
+│   │   ├── associate.py                       # beanai.HelpAssociateReceipt
+│   │   ├── remove.py                          # beanai.Remove
+│   │   └── refine.py                          # beanai.Refine
 │   ├── config.py                              # server-side configuration
+│   ├── llm.py                                 # shared LLM/streaming helpers (file_to_image_parts, …)
+│   ├── storage.py                             # WebDAV client helpers
 │   ├── pdf.py                                 # PDF→PNG conversion for receipt images
 │   └── *_PROMPT.md                            # prompts for LLMs
 │

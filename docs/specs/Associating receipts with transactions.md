@@ -128,7 +128,7 @@ Used when the LLM match result identifies a transaction by line_no + source_file
 | File | Changes |
 |---|---|
 | `beancount_ai/client/cli.py` | `associate` subcommand, `update_document_metadata()`, `find_transaction_in_file()`, `load_transaction_contexts()` client-side usage, `do_associate()` flow logic |
-| `beancount_ai/server/cli.py` | `beanai.HelpAssociateReceipt` handler: two LLM passes (info + match), stdin candidate reading |
+| `beancount_ai/server/commands/associate.py` | `beanai.HelpAssociateReceipt` handler (`run()`): two LLM passes (info + match), stdin candidate reading |
 
 ## Implementation order (actual, not planned)
 
