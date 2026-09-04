@@ -4,12 +4,25 @@
 
 `bean-ai` helps you manage your Beancount accounting data through AI —local or cloud, your choice— in several ways:
 
-* It can import (scanned or photographed) receipts into a Beancount file and organize them coherently.
-  * The LLM processes your receipt to extract transaction details and convert it into a Beancount transaction.  `bean-ai` uses that information to file the receipt under the appropriate account folder, and to write the newly-created transaction (complete with `document:` metadata tag linking back to the filed receipt).
-* It can automatically associate transactions already in your Beancount files with your receipts.
-  * Each receipt is analyzed by the LLM to determine date / amount, then `bean-ai` queries Beancount for matching transactions; the LLM is then directed to identify the correct transaction among the search results.  Finally, `bean-ai` files the receipt appropriately, then adds the `document:` tag to the identified transaction, pointing to the filed receipt.
-* It can even help you refine transactions down to the line item.
-  * A transaction you identify (by file name and line number — or a range of lines covering several transactions) will be submitted to the LLM, along with all its associated `document:`s, with instructions to enhance the transaction with all the factual detail present in the documents.  `bean-ai` then uses the response of the LLM to rewrite *only* that transaction in your Beancount file.
+### Ingest receipts directly into Beancount files
+
+It can import (scanned or photographed) receipts into a Beancount file and organize them coherently.
+
+The LLM processes your receipt to extract transaction details and convert it into a Beancount transaction.  `bean-ai` uses that information to file the receipt under the appropriate account folder, and to write the newly-created transaction (complete with `document:` metadata tag linking back to the filed receipt).
+
+### Associate and organize receipts of existing Beancount transactions
+
+It can automatically associate transactions already in your Beancount files with your receipts.
+
+Each receipt is analyzed by the LLM to determine date / amount, then `bean-ai` queries Beancount for matching transactions; the LLM is then directed to identify the correct transaction among the search results.  Finally, `bean-ai` files the receipt appropriately, then adds the `document:` tag to the identified transaction, pointing to the filed receipt.
+
+### Refine existing transactions that have documents
+
+It can even help you refine transactions down to the line item.
+
+A transaction you identify (by file name and line number — or a range of lines covering several transactions) will be submitted to the LLM, along with all its associated `document:`s, with instructions to enhance the transaction with all the factual detail present in the documents.  `bean-ai` then uses the response of the LLM to rewrite *only* that transaction in your Beancount file.
+
+### Simplify your workflows
 
 This lets you have a comprehensive AI-assisted workflow where:
 
@@ -20,7 +33,19 @@ This lets you have a comprehensive AI-assisted workflow where:
 
 All of the above happens with very little intervention on your part — at best, you'll fix an LLM-made error here and there; in most cases all you need to do is confirm the changes that the AI offers.
 
-This program imposes no dependency on cloud at all.  Furthermore, you do not need a harness like Codex or OpenClaw; you don't need MCP or any similar complication to use `bean-ai` either; the LLM is never given free / open access to your accounting data — it only ever sees the information that the current task requires, and it isn't allowed to touch anything else.  You *don't* need a frontier model for this — modest 30B parameter models do very well!
+### Do I need to submit my personal info to third parties?  Do I have to "run an AI" on my financial data?
+
+No!
+
+This program imposes no dependency on cloud at all.
+
+Furthermore, you do not need a harness like Codex or OpenClaw; you don't need MCP or any similar complication to use `bean-ai` either; the LLM is *never* given indiscriminate / free / open / write access to your accounting data — it only ever sees the information that the current task requires, and it isn't allowed to touch anything else.
+
+You also *don't* need a frontier model for this — modest 30B parameter models do very well!
+
+That said:
+
+### What do I need in order to use this program?
 
 *AI use:* You'll need an OpenAI-compatible LLM (private like Open-WebUI / Ollama or cloud like OpenAI) and an API key from your LLM service to be able to use this project.  Furthermore, whatever model you use needs to be capable of *vision*.  Note that, if you use a local (non-cloud) model, your Beancount and receipt data will always be 100% private.
 
