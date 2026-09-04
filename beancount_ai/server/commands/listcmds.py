@@ -1,25 +1,21 @@
 import argparse
 import json
 import sys
-from typing import Literal
 
-from beancount_ai.server.config import Configuration, WebDAVDocumentSourcesConfiguration
+from beancount_ai.server.config import Configuration
 from beancount_ai.server.llm import (
     VALID_EXTENSIONS,
 )
-from beancount_ai.server.storage import WebDAVClient
+from beancount_ai.server.storage import Category, make_receipt_backend
 from beancount_ai.structs import ItemListing
 
 
 def do_list(
     cfg: Configuration,
-    category: Literal["unassociated"] | Literal["uningested"],
+    category: Category,
     args: argparse.Namespace,
 ) -> None:
-    if isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration):
-        client = WebDAVClient(cfg.documents, category)
-    else:
-        assert 0, "not reached"
+    client = make_receipt_backend(cfg, category)
 
     try:
         items = client.list()

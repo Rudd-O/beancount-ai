@@ -97,7 +97,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
             except Exception as e:
                 raise Exception(f"Commit of imported {receipt} failed: {e}") from e
 
-            # Remove from WebDAV only after successful import.
+            # Remove from the server only after successful import.
             try:
                 remove.run(cfg, argparse.Namespace(filename=receipt))
             except Exception as e:
@@ -112,7 +112,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
                     raise Exception(
                         f"Could not roll back transaction of imported {receipt}: {ee}"
                     ) from ee
-                raise Exception(f"Could not remove {receipt} from WebDAV: {e}") from e
+                raise Exception(f"Could not remove {receipt} from folder: {e}") from e
 
     with tempfile.TemporaryDirectory() as tmpdir:
         preview_dir = Path(tmpdir)

@@ -137,7 +137,16 @@ Your configuration file must include three sections:
 * `documents`: lets `bean-ai` know where to find your receipts.
 * `ai`: informs `bean-ai` of your OpenAI-compatible LLM service.
 
-Here is a sample configuration file:
+Receipts can be stored on a **WebDAV** server, or in plain **local folders**
+on the server's filesystem (most users will want the local backend).
+The `documents.backend` key selects the backend: `"webdav"` or `"local"`.
+When the key is absent, the backend is inferred from the fields present:
+if **both** `uningested_receipts_folder` and `unassociated_receipts_folder`
+are given, the local backend is used; otherwise the WebDAV backend is used.
+Each backend has its own mandatory keys, and a configuration missing any of
+them is an error.
+
+Here is a sample configuration file using the local backend:
 
 ```json
 {
@@ -152,6 +161,27 @@ Here is a sample configuration file:
     "model_name": "qwen3.6:35b-a3b"
   },
   "documents": {
+    "backend": "local",
+    "uningested_receipts_folder": "/home/user/Documents/Receipts/uningested",
+    "unassociated_receipts_folder": "/home/user/Documents/Receipts/unassociated"
+  }
+}
+```
+
+With the local backend, each receipt category lives in its own, independent
+directory on the server's filesystem, given as a full path (created on demand
+by the server).  `<uningested_receipts_folder>` holds receipts awaiting
+conversion into transactions, and `<unassociated_receipts_folder>` holds
+receipts awaiting association with an existing transaction.  There is no
+shared base directory: the two folders may be placed anywhere, and even in
+unrelated locations.  (A shared base folder/URL is a WebDAV-only concept.)
+
+The equivalent WebDAV-based `documents` section looks like this:
+
+```json
+{
+  "documents": {
+    "backend": "webdav",
     "username": "dav-user",
     "password": "dav-pass",
     "base_url": "https://dav.example.com/files/Accounting",
@@ -179,11 +209,14 @@ You can append a comment with a space, and a hash sign, and another space to eac
 | `ai.api_url` | `str` | Base URL of the OpenAI compatible instance (example for an Open-WebUI instance running on a bare IP: `http://10.240.6.7/api/`). |
 | `ai.token` | `str` | API token for authenticating with the AI API. |
 | `ai.model_name` | `str` | Model name to use with the AI API. Must support vision. |
-| `documents.username` | `str` | WebDAV username for the receipts data source. |
-| `documents.password` | `str` | WebDAV password for the receipts data source. |
-| `documents.base_url` | `str` | Base URL of the WebDAV server containing receipts.  As an example using Nextcloud, the base URL would be `https://nextcloud.example.com/remote.php/dav/files/MyUsername`. |
-| `documents.uningested_receipts_subfolder` | `str` | Subfolder path on the WebDAV server where new receipts are stored. |
-| `documents.unassociated_receipts_subfolder` | `str` | Subfolder path on the WebDAV server where existing receipts (to be associated) are stored. |
+| `documents.backend` | `str` | Receipt storage backend: `"local"` or `"webdav"`. Optional; when absent, the local ``..._receipts_folder`` fields select `local`, otherwise `webdav`. |
+| `documents.uningested_receipts_folder` | `str` | *(local backend)* Full path to the directory where **new** (uningested) receipts are stored. |
+| `documents.unassociated_receipts_folder` | `str` | *(local backend)* Full path to the directory where **existing** (unassociated) receipts, to be associated, are stored. |
+| `documents.username` | `str` | *(webdav backend)* WebDAV username for the receipts data source. |
+| `documents.password` | `str` | *(webdav backend)* WebDAV password for the receipts data source. |
+| `documents.base_url` | `str` | *(webdav backend)* Base URL of the WebDAV server containing receipts.  As an example using Nextcloud, the base URL would be `https://nextcloud.example.com/remote.php/dav/files/MyUsername`. |
+| `documents.uningested_receipts_subfolder` | `str` | *(webdav backend)* Subfolder path (under `base_url`) where **new** (uningested) receipts are stored. |
+| `documents.unassociated_receipts_subfolder` | `str` | *(webdav backend)* Subfolder path (under `base_url`) where **existing** (unassociated) receipts, to be associated, are stored. |
 
 ### Split `bean-ai` — for Qubes OS users
 

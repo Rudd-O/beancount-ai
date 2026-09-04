@@ -12,13 +12,13 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
 )
 
-from beancount_ai.server.config import Configuration, WebDAVDocumentSourcesConfiguration
+from beancount_ai.server.config import Configuration
 from beancount_ai.server.llm import (
     file_to_image_parts,
     ssl_verify_path,
     stream_reasoning_and_output,
 )
-from beancount_ai.server.storage import WebDAVClient
+from beancount_ai.server.storage import make_receipt_backend
 
 RECEIPT_CONVERSION_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "RECEIPT_CONVERSION_PROMPT.md"
@@ -51,21 +51,21 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
     fn = os.path.basename(argsfilename)
 
-    if isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration):
-        webdav_client = WebDAVClient(cfg.documents, "uningested")
-    else:
-        assert 0, "not reached"
+    storage = make_receipt_backend(cfg, "uningested")
 
     receipt_path = f"/{fn}"
 
-    print(f"Reading {fn} from WebDAV receipts URL", file=sys.stderr)
+    print(
+        f"Reading {fn} from {cfg.documents.uningested_location_name()}",
+        file=sys.stderr,
+    )
 
     account_text = json.dumps(account_lines)
     prompt_text = RECEIPT_CONVERSION_PROMPT_PATH.read_text()
     prompt_text = prompt_text.format(accounts=account_text)
 
     try:
-        raw = webdav_client.read(receipt_path)
+        raw = storage.read(receipt_path)
     except Exception as e:
         print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)
