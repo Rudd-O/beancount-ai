@@ -13,11 +13,13 @@ bean-ai refine main.bean 1234               # one transaction (same as before)
 bean-ai refine main.bean 1234 5678          # two single-transaction targets
 bean-ai refine main.bean 123-456 789-1010   # two multi-transaction ranges
 bean-ai refine main.bean 1234 789-1010 2000 # mixed, mixed order
+bean-ai refine main.bean 456-end            # every tx from line 456 to end of file
 ```
 
 Each token is independently either:
-- a single 1-based line number `N` ("touch the transaction containing line N"), or
-- a range `A-B` where `A` and `B` are 1-based line numbers (`A <= B`), meaning "every transaction that *begins* on a line `L` with `A <= L <= B`". (Per the existing single-range semantics, the boundary is on the *start* line of the transaction, not its end, so a transaction whose body extends past `B` is still included whole.)
+- a single 1-based line number `N` ("touch the transaction containing line N"),
+- a range `A-B` where `A` and `B` are 1-based line numbers (`A <= B`), meaning "every transaction that *begins* on a line `L` with `A <= L <= B`" (per the existing single-range semantics, the boundary is on the *start* line of the transaction, not its end, so a transaction whose body extends past `B` is still included whole), or
+- an open range `A-end`, where `end` is a special value that always means the end of the file. It is exactly the same as `A-<last_line>`, but need not be recomputed as the file grows; the `end` keyword is resolved to the file's last line at validation time.
 
 The tokens may be interleaved in any order.  The resulting refinement run refines the **union** of all transactions selected by any token, in file order (i.e. ascending start-line order), each refined exactly once.
 
@@ -32,22 +34,23 @@ New grammar (the previous 2-positional-arg form is removed, not retained as a fa
 ```
 bean-ai refine <file_path> <target>+ [--yes | --no] [--clear]
 
-<target> ::= <line_no> | <line_no>-<line_no>
+<target>  ::= <line_no> | <line_no>-<line_no> | <line_no>-end
 ```
 
 - `<line_no>` is a positive integer (1-based).
-- A `<target>` is either a single `<line_no>`, or a `<line_no>-<line_no>` pair where `-` is a literal hyphen/minus (no whitespace allowed inside the token).
+- A `<target>` is a single `<line_no>`, a `<line_no>-<line_no>` pair, or a `<line_no>-end` pair, where `-` is a literal hyphen/minus and `end` is a literal keyword (no whitespace allowed inside the token).
+- The `end` keyword means the end of the file: `<line_no>-end` resolves to the file's last line. It is a convenience for writing a range that always runs to EOF without knowing (or recomputing) the file length.
 - The parser accepts **one or more** `<target>` tokens (previously: exactly one or two line-number positionals).
 - The old `[last_line_number]` optional positional is gone; the `A-B` form replaces it.
 
 Parsing notes:
-- argparse `nargs="+"` is used for the `<target>+` position with a `type=` callable that parses one token and returns the tuple `(start_1based, end_1based)` where `end_1based == start_1based` for single-token cases.  The callable raises `argparse.ArgumentTypeError` (with an explanatory message) on malformed tokens.
-- A token such as `5-` / `-5` / `5-3` (inverted), `0`, negative, or containing non-digit characters must be rejected with a clear message, not silently coerced.
+- argparse `nargs="+"` is used for the `<target>+` position with a `type=` callable that parses one token and returns the tuple `(start_1based, end_1based_or_None)` where `end_1based_or_None == start_1based` for single-token cases and is `None` for the `<line_no>-end` form.  The callable raises `argparse.ArgumentTypeError` (with an explanatory message) on malformed tokens.
+- A token such as `5-` / `-5` / `5-3` (inverted), `0`, negative, `end` without a leading line number, `5-End` (wrong case), or containing non-digit / non-keyword characters must be rejected with a clear message, not silently coerced.
 - The command still requires at least one `<target>` and at most as many as are needed for the given file (no artificial cap).
 
 ## Range validation
 
-After all tokens are parsed into `(start, end)` pairs (1-based, inclusive), the client validates them **before** any file access.  Violations raise `ValueError` (caught in `run()` and printed to stderr with non-zero exit, matching the style used for `split_into_transactions_by_range` validation today).
+After all tokens are parsed into `(start, end)` pairs (1-based, inclusive), the client resolves every `end` of `None` (the `A-end` form) to the file's last line (`n_lines`), then validates them.  Violations raise `ValueError` (caught in `run()` and printed to stderr with non-zero exit, matching the style used for `split_into_transactions_by_range` today).  The validation therefore happens **after** the file is read (so it knows `n_lines`); this is the one departure from "before any file access" in the original spec — the `end` keyword cannot be resolved without knowing the file length.
 
 Rules:
 
@@ -114,9 +117,16 @@ Updated transactions in Documents/Accounting/00-beancount.bean
 $ bean-ai refine Documents/Accounting/00-beancount.bean 123-456 789-1000
 ...refines every tx beginning on lines 123..456 and 789..1000, in file order...
 
+$ bean-ai refine Documents/Accounting/00-beancount.bean 456-end
+...refines every tx beginning on line 456 or later, in file order...
+
 $ bean-ai refine Documents/Accounting/00-beancount.bean 1234 789-1012
 Error: target ranges are not strictly ascending and non-overlapping: 1234 789-1012
        (token #2 begins before token #1 does)
+
+$ bean-ai refine Documents/Accounting/00-beancount.bean 100-end 200
+Error: target ranges are not strictly ascending and non-overlapping: 100-end 200
+       (ranges must not overlap)
 ```
 
 ## File and function changes
@@ -124,8 +134,8 @@ Error: target ranges are not strictly ascending and non-overlapping: 1234 789-10
 | File | Change |
 |---|---|
 | `beancount_ai/client/beanfiles.py` | Modify `split_into_transactions_by_range` so it emits **exactly one transaction per `True` group**: instead of grouping the per-line flags with `itertools.groupby()` (which merged consecutive unseparated transactions into a single group), the fold into blocks now starts a new block at every transaction header, so two adjacent transactions with no blank line between them become separate `(True, lineno, lines)` blocks.  This fixes the latent merged-block issue described in "Block extraction" and makes `classify_by_target_spans` a trivial remap.  Add `classify_by_target_spans(tx_lines: list[str], spans: list[tuple[int, int]]) -> list[tuple[bool, int, list[str]]]` (0-based inclusive) alongside it: run the base classifier once over the whole file and re-flag each `True` group by span intersection (walk-back).  Add doctests covering: single single-line token; single range token; multiple disjoint single-line tokens; multiple disjoint range tokens; mixed; walk-back when a single line lands mid-tx; dedup when two spans both select the same tx (via a contrived example). |
-| `beancount_ai/client/commands/refine.py` | Replace the two positional args (`first_line_number`, `last_line_number`) with one `nargs="+"` positional `targets` whose `type=` parses a token into `(start_1, end_1)` (1-based, `end >= start`).  Add `validate_target_ranges(targets: list[tuple[int,int]], n_lines: int) -> list[tuple[int,int]]` that enforces rules 1-3 and raises `ValueError`.  In `run()`: after reading the file, call `validate_target_ranges` (catch `ValueError` → stderr + exit 1, same style as the existing `split_into_transactions_by_range` error path), substitute the new block-extraction call for `classify_by_target_spans(all_lines, spans_0based)`, and drive the existing `do_refine_one` loop over the resulting flagged blocks.  Update `subcommand_parser` and the help string. |
-| `beancount_ai/tests/test_refine_targets.py` | New test module for the token parser and `validate_target_ranges` (accept/Reject matrix for each failure mode). |
+| `beancount_ai/client/commands/refine.py` | Replace the two positional args (`first_line_number`, `last_line_number`) with one `nargs="+"` positional `targets` whose `type=` parses a token into `(start_1, end_1_or_None)` (1-based, `end >= start`, or `None` for the `A-end` form).  Add `validate_target_ranges(targets: list[tuple[int, int\|None]], n_lines: int) -> list[tuple[int,int]]` that first resolves each `None` end to `n_lines`, then enforces rules 1-3 and raises `ValueError` (returning the resolved concrete pairs).  In `run()`: after reading the file, call `validate_target_ranges` (catch `ValueError` → stderr + exit 1, same style as the existing `split_into_transactions_by_range` error path), substitute the new block-extraction call for `classify_by_target_spans(all_lines, spans_0based)`, and drive the existing `do_refine_one` loop over the resulting flagged blocks.  Update `subcommand_parser` and the help string. |
+| `beancount_ai/tests/test_refine_targets.py` | New test module for the token parser and `validate_target_ranges` (accept/Reject matrix for each failure mode, incl. the `A-end` open-range form, its resolution to the file's last line, and the rejection list). |
 | `beancount_ai/tests/test_do_refine.py` | Update `argparse.Namespace(...)` constructions: replace `first_line_number` / `last_line_number` attributes with `targets=[(...)]` (1-based pairs). |
 | `beancount_ai/tests/test_split_at_transaction_by_line_number.py` | Add doctest/unit tests for `classify_by_target_spans` mirroring the existing `split_into_transactions_by_range` test shape. |
 | `docs/specs/Refine existing Beancount transactions.md` | Add a pointer at the top: "The target-specification grammar described here is superseded by `docs/specs/Refine multi-range target specification.md`.  See that document for the CLI argument format; the rest of this document (flow, prompt, server-side protocol) still applies." |

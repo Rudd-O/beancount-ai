@@ -65,9 +65,10 @@ transaction in its `document:` / `documentN:` metadata, the `refine` command
 uses that evidence to produce a more detailed and accurate version of the
 same transaction.
 
-For one or more transactions pointed at by file path and line number (or a
-range of lines, which refines every transaction beginning within the range),
-the refinement:
+For one or more transactions pointed at by file path and line number, or an
+inclusive range of lines (refining every transaction that begins within the
+range), or an open range to the end of the file (`A-end`, refining every
+transaction from line `A` to the last line), the refinement:
 
 * Extracts the full transaction block(s) (date, postings, metadata, inline
   comments), leaving all surrounding data untouched.

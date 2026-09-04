@@ -27,24 +27,32 @@ from beancount_ai.client.server import (
 from beancount_ai.structs import RefineRequest, RefineRequestDocument
 
 _TX_HEADER_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2} [*!D]\s")
-_TARGET_REGEX = re.compile(r"^([1-9][0-9]*)(?:-([1-9][0-9]*))?$")
+_TARGET_REGEX = re.compile(r"^([1-9][0-9]*)(?:-(end|[1-9][0-9]*))?$")
 
 
-def parse_target(token: str) -> tuple[int, int]:
+def parse_target(token: str) -> tuple[int, int | None]:
     """Parse one target token from the command line into a 1-based (start, end) pair.
 
     A token is either a single line number ("42" -> (42, 42), meaning the
-    transaction containing that line) or an inclusive range ("12-45" ->
-    (12, 45), meaning every transaction beginning between the two lines).
+    transaction containing that line), an inclusive range ("12-45" -> (12, 45),
+    meaning every transaction beginning between the two lines), or an open
+    range ending at the end of the file ("12-end" -> (12, None); the ``None``
+    end is resolved to the file's last line at validation time).
     """
     m = _TARGET_REGEX.match(token)
     if m is None:
         raise argparse.ArgumentTypeError(
-            f"invalid target {token!r}: expected a 1-based line number (N) or an "
-            "inclusive range of line numbers (A-B)"
+            f"invalid target {token!r}: expected a 1-based line number (N), an "
+            "inclusive range of line numbers (A-B), or an open range to the end "
+            "of the file (A-end)"
         )
     start = int(m.group(1))
-    end = int(m.group(2)) if m.group(2) is not None else start
+    end_token = m.group(2)
+    if end_token is None:
+        return (start, start)
+    if end_token == "end":
+        return (start, None)
+    end = int(end_token)
     if end < start:
         raise argparse.ArgumentTypeError(
             f"invalid target {token!r}: range end must be greater than or equal to its start"
@@ -52,47 +60,58 @@ def parse_target(token: str) -> tuple[int, int]:
     return (start, end)
 
 
-def _fmt_target(start: int, end: int) -> str:
+def _fmt_target(start: int, end: int | None) -> str:
+    if end is None:
+        return f"{start}-end"
     return f"{start}" if start == end else f"{start}-{end}"
 
 
 def validate_target_ranges(
-    targets: list[tuple[int, int]], n_lines: int
+    targets: list[tuple[int, int | None]], n_lines: int
 ) -> list[tuple[int, int]]:
-    """Validate user-supplied 1-based inclusive target spans; raises ValueError.
+    """Validate and resolve user-supplied 1-based target spans; raises ValueError.
 
-    Rules:
+    Every ``end`` of ``None`` (the ``A-end`` form) is first resolved to
+    ``n_lines``.  Rules:
       - every span's line numbers must be within the file (1..n_lines);
       - spans must be strictly ascending: each subsequent span must begin
         after the previous one begins;
       - spans must not overlap: each subsequent span must begin strictly
         after the previous one ends (spans may be contiguous: 1-500 and
         501-1000 do not overlap).
+
+    Returns the resolved list of concrete (start, end) pairs.
     """
     if not targets:
         raise ValueError("at least one target is required")
+    resolved: list[tuple[int, int]] = []
+    prev_start = prev_end = 0
+    prev_raw: tuple[int, int | None] = (0, 0)
     for idx, (start, end) in enumerate(targets, start=1):
-        if start > n_lines or end > n_lines:
+        res_end = n_lines if end is None else end
+        if start > n_lines or res_end > n_lines:
             raise ValueError(
                 f"target range {_fmt_target(start, end)} out of file bounds "
                 f"(file has {n_lines} lines)"
             )
-    prev_start, prev_end = targets[0]
-    for idx, (start, end) in enumerate(targets[1:], start=2):
-        if start <= prev_start:
-            raise ValueError(
-                f"target ranges are not strictly ascending and non-overlapping: "
-                f"range #{idx - 1} ({_fmt_target(prev_start, prev_end)}) and range "
-                f"#{idx} ({_fmt_target(start, end)}) — a later range must begin "
-                "after the earlier one"
-            )
-        if start <= prev_end:
-            raise ValueError(
-                f"target ranges are not strictly ascending and non-overlapping: "
-                f"range #{idx - 1} ({_fmt_target(prev_start, prev_end)}) and range "
-                f"#{idx} ({_fmt_target(start, end)}) — ranges must not overlap"
-            )
-    return targets
+        if idx > 1:
+            if start <= prev_start:
+                raise ValueError(
+                    "target ranges are not strictly ascending and non-overlapping: "
+                    f"range #{idx - 1} ({_fmt_target(*prev_raw)}) and range "
+                    f"#{idx} ({_fmt_target(start, end)}) — a later range must begin "
+                    "after the earlier one"
+                )
+            if start <= prev_end:
+                raise ValueError(
+                    "target ranges are not strictly ascending and non-overlapping: "
+                    f"range #{idx - 1} ({_fmt_target(*prev_raw)}) and range "
+                    f"#{idx} ({_fmt_target(start, end)}) — ranges must not overlap"
+                )
+        resolved.append((start, res_end))
+        prev_start, prev_end = start, res_end
+        prev_raw = (start, end)
+    return resolved
 
 
 def preview_local_document(doc_path: str, tx_file: Path, cfg: Configuration) -> None:
@@ -124,7 +143,8 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
 
     The user points at one or more transactions by file path plus one or more
     1-based line number / line range targets (e.g. ``bean-ai refine f.bean 12
-    45-80 100``).  The client extracts every targeted transaction block,
+    45-80 100 200-end``).  The ``-end`` suffix on a range means "to the end
+    of the file".  The client extracts every targeted transaction block,
     gathers the client-local documents linked in their metadata, sends each one
     (base64-encoded) to the server over the standard transport, and asks the
     LLM for a rewritten transaction.  A colored diff is shown and, depending
@@ -142,8 +162,8 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
     #    preserving all formatting.  Targets are 1-based inclusive (start, end)
     #    pairs; the classifier takes zero-based spans.
     try:
-        validate_target_ranges(args.targets, len(original_lines))
-        spans = [(s - 1, e - 1) for s, e in args.targets]
+        resolved = validate_target_ranges(args.targets, len(original_lines))
+        spans = [(s - 1, e - 1) for s, e in resolved]
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -354,11 +374,12 @@ def subcommand_parser(
         type=parse_target,
         metavar="TARGET",
         help=(
-            "1-based line number of any line of a transaction to refine (N), or an "
-            "inclusive range of such line numbers (A-B): every transaction beginning "
-            "between the two lines is refined.  Give several targets to batch multiple "
-            "edit operations in one command; they must be strictly ascending and "
-            "non-overlapping."
+            "1-based line number of any line of a transaction to refine (N), an "
+            "inclusive range of such line numbers (A-B), or an open range running to "
+            "the end of the file (A-end): every transaction beginning between the two "
+            "lines is refined (with A-end, to the last line of the file).  Give "
+            "several targets to batch multiple edit operations in one command; they "
+            "must be strictly ascending and non-overlapping."
         ),
     )
     refine_cmd.add_argument(

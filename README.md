@@ -62,6 +62,8 @@ bean-ai associate
 bean-ai refine Expenses.beancount 157
 # or batch refinement: any mix of single line numbers and inclusive line ranges
 bean-ai refine Expenses.beancount 157-200 408 500-700
+# the `end` keyword runs a range to the end of the file
+bean-ai refine Expenses.beancount 500-end
 # --clear additionally sets the flag of every modified transaction to the clear flag (*)
 bean-ai refine Expenses.beancount 157-200 408 --clear
 ```

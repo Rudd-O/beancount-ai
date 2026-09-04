@@ -27,6 +27,12 @@ class TestParseTarget:
     def test_degenerate_range_is_single(self) -> None:
         assert parse_target("42-42") == (42, 42)
 
+    def test_open_range_to_end(self) -> None:
+        assert parse_target("12-end") == (12, None)
+
+    def test_open_range_single_to_end(self) -> None:
+        assert parse_target("5-end") == (5, None)
+
     @pytest.mark.parametrize(
         "token",
         [
@@ -37,6 +43,7 @@ class TestParseTarget:
             "-1",  # missing range start / negative
             "-5",
             "1-2-3",  # two hyphens
+            "1-end-5",  # two hyphens with the end keyword
             "12a",
             "abc",
             "",
@@ -45,6 +52,10 @@ class TestParseTarget:
             "4.2",
             "+5",
             "1--5",
+            "end",  # bare keyword, no start
+            "end-5",  # keyword as start
+            "1-end5",  # trailing junk after the end keyword
+            "12-End",  # keyword is case sensitive
         ],
     )
     def test_rejects(self, token: str) -> None:
@@ -81,6 +92,29 @@ class TestValidateTargetRanges:
     def test_empty_list_rejected(self) -> None:
         with pytest.raises(ValueError):
             validate_target_ranges([], 9)
+
+    def test_open_range_resolves_to_file_end(self) -> None:
+        assert validate_target_ranges([(10, None)], 99) == [(10, 99)]
+
+    def test_open_range_mixed_with_concrete_targets_ok(self) -> None:
+        assert validate_target_ranges([(10, 20), (30, None)], 100) == [
+            (10, 20),
+            (30, 100),
+        ]
+
+    def test_open_range_then_later_target_rejected(self) -> None:
+        # Once a range runs to the end of the file, nothing may follow it.
+        with pytest.raises(ValueError, match="must not overlap"):
+            validate_target_ranges([(10, None), (50, 60)], 100)
+
+    def test_open_range_start_out_of_bounds_rejected(self) -> None:
+        with pytest.raises(ValueError, match="out of file bounds"):
+            validate_target_ranges([(12, None)], 9)
+
+    def test_open_range_in_error_message(self) -> None:
+        # The open form is rendered back as "A-end" in diagnostic output.
+        with pytest.raises(ValueError, match=r"^target range 12-end out of file"):
+            validate_target_ranges([(12, None)], 6)
 
     def test_descending_starts_rejected(self) -> None:
         with pytest.raises(ValueError, match="not strictly ascending"):
@@ -123,6 +157,14 @@ class TestArgparseWiring:
     def test_range_only(self) -> None:
         args = _parse_refine(["f.bean", "123-456"])
         assert args.targets == [(123, 456)]
+
+    def test_open_range_to_end(self) -> None:
+        args = _parse_refine(["f.bean", "5678-end"])
+        assert args.targets == [(5678, None)]
+
+    def test_open_range_among_targets(self) -> None:
+        args = _parse_refine(["f.bean", "1234", "5678-end"])
+        assert args.targets == [(1234, 1234), (5678, None)]
 
     def test_no_targets_rejected(self) -> None:
         with pytest.raises(SystemExit):
