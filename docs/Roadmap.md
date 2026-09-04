@@ -26,7 +26,7 @@ Generated from code review of all Python files under `beancount_ai`.
 
 - **Filename collision handling** in `predict_receipt_destination_path` (`client/beanfiles.py:23`) — if two receipts share a date + description, the second silently overwrites the first. `shorten_fn()` only shortens over-long names; it does not guard against an already-existing path. Add a `Path.exists()` guard that appends a counter suffix (e.g. `receipt.jpg`, `receipt_2.jpg`).
 - **Dedup check before fetch** — both `ImportResult.__init__` (`client/commands/importcmd.py:26`) and the associate command's per-receipt flow (`client/commands/associate.py:303`) download a receipt via `fetch_receipt` even when it may already exist locally (e.g. after an interrupted ingest). Compare file hashes first.
-- **Prompt injectivity for accounts** — the account list is currently dynamically injected to `RECEIPT_CONVERSION_PROMPT.md` on the server side, with an account listing coming from the client side, which is read from a static file on disk. This should be dynamically provided by the client, directly from the Beancount data, in a safe manner to minimize injection risks through the AI payload.  An important question to resolve prior to solving this issue is how do we ensure only certain accounts in the tree are included, and another question is how do we extract user-supplied comments for each account, to support the current use of the account list (which includes an account with an optional `#`-prefixed comment at the end).  Can we supply this information using Beancount account open metadata?  If so, then it's worth doing it.
+- **Prompt injectivity for accounts** — the account list is currently dynamically injected to `RECEIPT_CONVERSION_PROMPT.md` on the server side, with an account listing coming from the client side, which is read from a static file on disk. This should be dynamically provided by the client, directly from the Beancount data, in a safe manner to minimize injection risks through the AI payload.  Only accounts open at the date of the execution of `bean-ai` should be considered.  An important question to resolve prior to solving this issue is how do we ensure only certain accounts in the tree are included in prompts (probably a metadata key on the accounts named `bean-ai-use`, with values `yes` or `recursive`, open to suggestions here), and another question is how do we extract user-supplied comments for each account (probably metadata key on the accounts named `bean-ai-rules`), to support the current use of the account list (which currently includes each account with an optional `#`-prefixed comment at the end).  Can metadata even be added to an account that hasn't been opened???  Because it may not be desirable for the user to have to explicitly open an account just so metadata fields can be added to it.
 
 ## 5. The associate flow (partial feature)
 
@@ -36,7 +36,7 @@ The `associate` subcommand is implemented but remains partially incomplete:
 |---|---|
 | Phase 1 — Receipt date/amount extraction via LLM | **Done** — `HelpAssociateReceipt` processes the receipt with `RECEIPT_INFO_PROMPT.md`. |
 | Phase 2 — Beancount candidate loader (`load_transaction_contexts`) | **Done** — used at `client/commands/associate.py:96` within `do_associate_one`. |
-| Phase 3 — Server-side match subcommand | **Partial** — implemented as `beanai.HelpAssociateReceipt`; two-step flow (receipt info first, then candidate matching via stdin). Works. |
+| Phase 3 — Server-side match subcommand | **Done** — implemented as `beanai.HelpAssociateReceipt`; two-step flow (receipt info first, then candidate matching via stdin). Works. |
 | Phase 4 — Interactive ambiguous-match picker | **Not done** — the ranked-list prompt is commented out at `client/commands/associate.py:139-180` and never reached; instead an exception is raised when matches are ambiguous (`client/commands/associate.py:134-137`). Needs to be un-commented and wired up. |
 
 Additionally:
@@ -50,8 +50,10 @@ This project originally had a local file-based receipt backend but for expedienc
 
 | Priority | Item |
 |---|---|
-| High | Beancount file edit safety — backup before edit + atomic write |
-| High | Un-comment / wire up the `associate` ambiguous match picker from the spec |
+| High | User-selectable local file-based receipt backend |
+| High | Prompt injectivity for accounts: discover accounts by querying Beancount |
+| Medium | Beancount file edit safety — backup before edit + atomic write |
+| Medium | Un-comment / wire up the `associate` ambiguous match picker from the spec |
 | Medium | Config schema validation (missing keys, empty values) |
 | Low | Add `--dry-run` mode for all write operations (current `--no` only shows diff, it does not process) |
 | Low | Dedup check before receipt fetch |
