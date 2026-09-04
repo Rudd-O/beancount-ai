@@ -97,6 +97,15 @@ Find a reference to all subcommands in the [Commands](docs/Commands.md) document
 
 ## Details
 
+### Feeding receipts to `bean-ai`
+
+`bean-ai` can obtain receipts from **local folders on your computer**, or
+on a **WebDAV** server.  You'll set up two distinct folders:
+
+* the uningested receipts folder — everything here can be ingested by `bean-ai ingest`
+* the unassociated receipts folder — everything here can be assigned to an
+  existing transaction by `bean-ai associate`
+
 ### Batch operation
 
 `ingest`, `refine` and `associate` work interactively by default, but they support batch operation too.  They support flag `--no` which does all the work but never touches your files.  They all also support mode `--yes`, which goes ahead and makes all modifications to your Beancount data, importing receipts into your Beancount folder and deleting them from the source.  Any exceptions processing receipts when using these two flags are printed (summarized) as they take place, and they are printed in detail at the end of the run; normally (in interactive mode), an exception interrupts the whole process at the first failure.
@@ -137,8 +146,6 @@ Your configuration file must include three sections:
 * `documents`: lets `bean-ai` know where to find your receipts.
 * `ai`: informs `bean-ai` of your OpenAI-compatible LLM service.
 
-Receipts can be stored on a **WebDAV** server, or in plain **local folders**
-on the server's filesystem (most users will want the local backend).
 The `documents.backend` key selects the backend: `"webdav"` or `"local"`.
 When the key is absent, the backend is inferred from the fields present:
 if **both** `uningested_receipts_folder` and `unassociated_receipts_folder`
@@ -162,8 +169,8 @@ Here is a sample configuration file using the local backend:
   },
   "documents": {
     "backend": "local",
-    "uningested_receipts_folder": "/home/user/Documents/Receipts/uningested",
-    "unassociated_receipts_folder": "/home/user/Documents/Receipts/unassociated"
+    "uningested_receipts_folder": "/home/user/Dropbox/Receipts/uningested",
+    "unassociated_receipts_folder": "/home/user/Dropbox/Receipts/unassociated"
   }
 }
 ```
@@ -176,15 +183,16 @@ receipts awaiting association with an existing transaction.  There is no
 shared base directory: the two folders may be placed anywhere, and even in
 unrelated locations.  (A shared base folder/URL is a WebDAV-only concept.)
 
-The equivalent WebDAV-based `documents` section looks like this:
+The equivalent WebDAV-based `documents` section — exemplified by the typical
+Nextcloud user setup — looks like this:
 
 ```json
 {
   "documents": {
     "backend": "webdav",
-    "username": "dav-user",
+    "username": "John",
     "password": "dav-pass",
-    "base_url": "https://dav.example.com/files/Accounting",
+    "base_url": "https://nextcloud.server.com/remote.php/dav/John/files/Accounting",
     "uningested_receipts_subfolder": "receipts/uningested",
     "unassociated_receipts_subfolder": "receipts/unassociated"
   }

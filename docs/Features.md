@@ -89,15 +89,24 @@ transaction from line `A` to the last line), the refinement:
 The `document:` metadata tags are preserved unchanged, and the linked
 document files are read-only inputs — they are never moved or deleted.
 
-## Protecting the ledger
+## Protecting your ledger
 
-All of the above operations share two safety properties:
+All operations share three safety properties:
 
 * **One writer at a time.** `bean-ai` takes an exclusive lock on the main
   Beancount file as soon as the configuration is loaded and holds it for the
   whole subcommand.  Run `bean-ai` from a second terminal while the first is
   working and the second prints a notice and waits for the first to finish —
   it will not overwrite or interleave with the in-progress write.
+* **No clobbering of your own edits.** The file-modifying commands
+  (`refine`, `associate`, and `import` / `ingest`) fingerprint the Beancount
+  file's content right after reading it and re-check the fingerprint before
+  writing.  If the file changed on disk in the meantime — most commonly because
+  you edited it in your own ledger while `bean-ai` was talking to the LLM —
+  `bean-ai` refuses to write, reports which file changed, and exits without
+  touching it, so your edits are preserved.  Re-run the command to re-read the
+  file and try again.  (Comparison is by content, not timestamp: touching a
+  file's mtime does not trip it.)
 * **Durable writes.** Every write to a Beancount file is flushed and pushed
   to disk (`fsync`) before `bean-ai` proceeds, so an interrupted run does not
   leave a truncated or partial ledger entry.

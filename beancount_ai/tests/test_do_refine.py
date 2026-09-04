@@ -83,6 +83,9 @@ def fake_call(monkeypatch: "pytest.MonkeyPatch") -> dict[str, Any]:
     state: dict[str, Any] = {
         "llm_output": "",
         "proc": mock.MagicMock(),
+        # Optional callable invoked while the (simulated) LLM call is in flight,
+        # to model an external actor editing the ledger during that window.
+        "mutate": None,
     }
     state["proc"].wait.return_value = 0
 
@@ -93,6 +96,8 @@ def fake_call(monkeypatch: "pytest.MonkeyPatch") -> dict[str, Any]:
         assert arg is None  # refine carries no CLI argument
         stdin = _StdinCapture()
         state["stdin"] = stdin  # do_refine writes the payload into it
+        if state["mutate"] is not None:
+            state["mutate"]()  # simulate an external edit mid-processing
         stdout = io.BytesIO(_jsonl_stream(state["llm_output"]).encode("utf-8"))
         return (["cmd"], state["proc"], stdin, stdout)
 
@@ -155,6 +160,43 @@ def test_do_refine_no_flag_does_not_write(
     refine.run(cfg, args)
     assert (tmp_path / "main.bean").read_text(encoding="utf-8") == original
     assert "--no requested" in capsys.readouterr().err
+
+
+def test_do_refine_rejects_write_if_file_edited_while_running(
+    tmp_path: pathlib.Path,
+    fake_call: dict[str, Any],
+    capsys: "pytest.CaptureFixture[str]",
+) -> None:
+    """If the ledger is edited while the LLM call is in flight, refuse to write.
+
+    This is the clobber-prevention guarantee: the user's concurrent edit must
+    survive, and bean-ai must exit non-zero rather than overwrite it.
+    """
+    cfg = _make_config(tmp_path)
+    bean = tmp_path / "main.bean"
+    fake_call["llm_output"] = json.dumps({"transaction": REFINED_BLOCK})
+
+    # Model an external editor writing to the file while bean-ai "talks to the LLM".
+    user_edit = bean.read_text(encoding="utf-8") + '2026-09-01 * "User" "Edit"\n'
+    fake_call["mutate"] = lambda: bean.write_text(user_edit, encoding="utf-8")
+
+    args = argparse.Namespace(
+        file_path=str(bean),
+        targets=[(2, 2)],
+        yes=True,
+        no=False,
+        clear=False,
+        only_show_affected=False,
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        refine.run(cfg, args)
+
+    assert exc.value.code == 1
+    # The user's edit is preserved intact; the LLM's refinement was NOT applied.
+    assert bean.read_text(encoding="utf-8") == user_edit
+    assert "Coop Supermarket" not in bean.read_text(encoding="utf-8")
+    assert "modified since bean-ai read it" in capsys.readouterr().err
 
 
 def test_do_refine_missing_file(

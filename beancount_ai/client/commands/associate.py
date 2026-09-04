@@ -17,6 +17,8 @@ from beancount_ai.client.beancount_loader import (  # type:ignore
     load_transaction_contexts,
 )
 from beancount_ai.client.beanfiles import (
+    FileGuard,
+    FileModifiedError,
     predict_receipt_destination_path,
     update_document_metadata,
     write_beancount_file,
@@ -235,8 +237,11 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
                 f"Warning: Transaction source file '{tx_file}' does not exist. Cannot update metadata."
             )
 
-        # Read the transaction text and update it.
+        # Read the transaction text and update it.  Snapshot the content so we
+        # can detect (and abort on) external edits made while we were waiting,
+        # instead of clobbering them at write time.
         all_lines = tx_file.read_text(encoding="utf-8").splitlines(True)
+        tx_file_guard = FileGuard.take(tx_file)
 
         if line_no > len(all_lines):
             raise Exception(
@@ -299,6 +304,15 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
         if args.no:
             print(f"Skipping changes to {tx_file} (--no requested)", file=sys.stderr)
             return
+
+        # The transaction file may have changed while we waited (e.g. an LLM
+        # call or the user's editor).  If so, the matched line and our edit are
+        # both based on stale content, so back out before writing anything
+        # (including the new receipt file).
+        try:
+            tx_file_guard.verify()
+        except FileModifiedError as e:
+            raise Exception(f"Refusing to associate: {e}") from e
 
         # Download the receipt and save it organized.
         raw_bytes = vm.fetch_receipt(receipt)

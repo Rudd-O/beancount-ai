@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 
 from beancount_ai.client.beanfiles import (
+    FileGuard,
+    FileModifiedError,
     insert_document_metadata,
     predict_receipt_destination_path,
 )
@@ -22,6 +24,13 @@ class ImportResult:
     receipt_destination_path: Path
     ingestion_destination_path: Path
     rollback_size: int | None = None
+    # Guard over the ingestion file, snapshotted the moment this result is
+    # constructed.  The file must already exist: this is a Beancount file
+    # operation, and proceeding without it is an error, so taking the guard
+    # fails loudly if it is missing.  :meth:`commit` refuses to write if the
+    # on-disk content has since changed, so we never clobber an edit the user
+    # made while we were processing the receipt.
+    _ingestion_guard: FileGuard
 
     def __init__(
         self,
@@ -29,6 +38,13 @@ class ImportResult:
         beancount: BeancountConfiguration,
         filename: str,
     ) -> None:
+        # Snapshot the ingestion file up front, before the (slow) LLM call, so
+        # that edits made while we process the receipt are detected at commit.
+        # The file must exist (it is a Beancount file); ``take`` raises if it
+        # is missing, surfacing that error instead of proceeding.
+        dest = beancount.ingestion_destination_path
+        self._ingestion_guard = FileGuard.take(dest)
+
         receipt_data = vm.fetch_receipt(filename)
 
         beancount_transaction, account = vm.process_receipt(
@@ -81,7 +97,7 @@ class ImportResult:
     def diff(self) -> list[str]:
         """Print a unified diff of what would be appended to the ingestion file."""
         dest = self.ingestion_destination_path
-        current = dest.read_text(encoding="utf-8") if dest.exists() else ""
+        current = dest.read_text(encoding="utf-8")
         old_lines = current.splitlines(True) if current else []
         appended = self._formatted_transaction_text(current)
         new_lines = (current + appended).splitlines(True)
@@ -99,6 +115,16 @@ class ImportResult:
     def commit(self) -> None:
         dest = self.ingestion_destination_path
         receipt_path = self.receipt_destination_path
+
+        # The ingestion file is shared across transactions, so it is the most
+        # likely place for the user (or another bean-ai run) to edit while we
+        # were away talking to the LLM.  If it changed since we snapshotted it
+        # at construction, refuse to write rather than corrupting the file.
+        try:
+            self._ingestion_guard.verify()
+        except FileModifiedError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
         try:
             # Write the receipt data.

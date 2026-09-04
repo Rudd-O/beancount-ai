@@ -125,6 +125,22 @@ class TestInitCalls:
         accounts_arg: list[str] = vm.process_receipt.call_args[0][1]
         assert "Expenses:Food" in accounts_arg
 
+    def test_raises_when_ingestion_file_missing(
+        self, tmp_path: pathlib.Path, bc: BeancountConfiguration
+    ) -> None:
+        """The ingestion file must pre-exist; constructing without it is an error.
+
+        This is a Beancount file operation, so a missing target file is not a
+        state to recover from by creating it — it is an error to surface.
+        """
+        vm: mock.MagicMock = _make_vm()
+
+        ingest: pathlib.Path = tmp_path / "imported.bean"
+        ingest.unlink()
+
+        with pytest.raises(FileNotFoundError):
+            ImportResult(vm, bc, "test.pdf")
+
 
 class TestInitStripping:
     def test_strips_leading_comment_lines(self, bc: BeancountConfiguration) -> None:
@@ -264,6 +280,55 @@ class TestCommit:
 
         assert result.rollback_size is not None
         assert result.rollback_size == initial_size
+
+
+class TestCommitRefusesModifiedIngestionFile:
+    def test_commit_exits_if_ingestion_file_edited_after_read(
+        self, tmp_path: pathlib.Path, bc: BeancountConfiguration,
+        capsys: "pytest.CaptureFixture[str]",
+    ) -> None:
+        """If the ingestion file changes after diff() read it, commit must abort.
+
+        The ingestion file is shared across transactions, so this is the
+        most likely place for a concurrent user edit; clobbering it would
+        corrupt the ledger.
+        """
+        ingest = tmp_path / "imported.bean"
+        ingest.write_text("2025-01-01 * \"Seed\"\n", encoding="utf-8")
+
+        result = ImportResult(_make_vm(), bc, "test.pdf")
+        # Read the current content, as run() does before prompting.
+        result.diff()
+
+        # Simulate the user editing the ledger while bean-ai processed the receipt.
+        ingest.write_text(
+            "2025-01-01 * \"Seed\"\n2026-09-01 * \"User\" \"Edit\"\n",
+            encoding="utf-8",
+        )
+
+        before = ingest.read_text(encoding="utf-8")
+        with pytest.raises(SystemExit) as exc:
+            result.commit()
+
+        assert exc.value.code == 1
+        # The user's content survived; nothing was appended.
+        assert ingest.read_text(encoding="utf-8") == before
+        assert "2025-03-18" not in ingest.read_text(encoding="utf-8")
+        assert "modified since bean-ai read it" in capsys.readouterr().err
+
+    def test_commit_proceeds_if_ingestion_file_unchanged(
+        self, tmp_path: pathlib.Path, bc: BeancountConfiguration
+    ) -> None:
+        """No spurious abort when the file is untouched between diff and commit."""
+        ingest = tmp_path / "imported.bean"
+        ingest.write_text("", encoding="utf-8")
+
+        result = ImportResult(_make_vm(), bc, "test.pdf")
+        result.diff()
+        result.commit()  # must not raise
+
+        content = ingest.read_text(encoding="utf-8")
+        assert "2025-03-18" in content
 
 
 class TestCommitRollbackOnFailure:

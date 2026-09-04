@@ -10,6 +10,8 @@ from typing import cast
 
 from beancount_ai.client.beanfiles import (
     FileBlocks,
+    FileGuard,
+    FileModifiedError,
     classify_by_target_spans,
     extract_document_paths,
     resolve_local_document_path,
@@ -157,6 +159,9 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
         print(f"Error: file not found: {tx_file}", file=sys.stderr)
         sys.exit(1)
     original_lines = tx_file.read_text(encoding="utf-8").splitlines(True)
+    # Snapshot the file content so we can detect (and abort on) any external
+    # edit made while we were away talking to the LLM, instead of clobbering it.
+    tx_guard = FileGuard.take(tx_file)
 
     # 2. Validate the targets and extract the transaction blocks,
     #    preserving all formatting.  Targets are 1-based inclusive (start, end)
@@ -353,6 +358,13 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
 
     if new_lines != original_lines:
         new_text = "".join(new_lines)
+        # Refuse to clobber edits the user made since we read the file: the
+        # last write is the only mutation, so a single pre-write check covers it.
+        try:
+            tx_guard.verify()
+        except FileModifiedError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
         write_beancount_file(tx_file, new_text)
         print(f"Updated transactions in {tx_file}", file=sys.stderr)
 

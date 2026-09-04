@@ -1,11 +1,72 @@
 """Raw Beancount file operations.  Query-related code is in beancount_loader.py."""
 
+import hashlib
 import os
 import re
 from datetime import date
 from pathlib import Path
 
 _DOCUMENT_METADATA_REGEX = re.compile(r'^\s*document(\d*):\s*"([^"]+)"')
+
+
+class FileModifiedError(Exception):
+    """A Beancount file was modified (or removed) after bean-ai read it.
+
+    Raised by :meth:`FileGuard.verify` when the on-disk content no longer
+    matches the snapshot taken when the file was read, so that bean-ai can
+    refuse to clobber edits the user made since the file was loaded.
+    """
+
+
+def _content_hash(path: Path) -> int:
+    """Return a content checksum of *path* (raises ``FileNotFoundError`` if absent)."""
+    data = path.read_bytes()
+    return int.from_bytes(hashlib.sha256(data).digest()[:16], "big")
+
+
+class FileGuard:
+    """A snapshot of a file's content, guarding against concurrent external edits.
+
+    A :class:`FileGuard` binds a file path to the checksum of its content at the
+    moment the guard was taken — right after bean-ai read the file.  Before
+    writing back, the caller invokes :meth:`verify`; if the on-disk content has
+    since changed (or the file was deleted), :class:`FileModifiedError` is
+    raised so the caller can refuse to clobber the user's edits and re-read the
+    file instead.  Comparison is by content, not by mtime, so merely touching a
+    file's timestamp does not trip it, but any change to the bytes does.
+    """
+
+    _path: Path
+    _hash: int
+
+    def __init__(self, path: Path, hash_value: int) -> None:
+        self._path = path
+        self._hash = hash_value
+
+    @classmethod
+    def take(cls, path: Path) -> "FileGuard":
+        """Snapshot the file's current content; return a guard over it.
+
+        Raises ``FileNotFoundError`` if *path* does not exist.  A caller taking
+        a guard has just read the file, so a missing file here is a genuine
+        error the caller should surface — not a state to be quietly ignored —
+        which is why the method returns a guard and never ``None``.
+        """
+        return cls(path, _content_hash(path))
+
+    def verify(self) -> None:
+        """Raise :class:`FileModifiedError` if the content changed since :meth:`take`."""
+        try:
+            current = _content_hash(self._path)
+        except FileNotFoundError:
+            raise FileModifiedError(
+                f"{self._path} was deleted after bean-ai read it; refusing to write"
+            ) from None
+        if current != self._hash:
+            raise FileModifiedError(
+                f"{self._path} appears to have been modified since bean-ai read it; "
+                "refusing to overwrite — re-run the command to re-read the file"
+            )
 
 
 def shorten_fn(folder: str | Path, fn: str) -> str:
