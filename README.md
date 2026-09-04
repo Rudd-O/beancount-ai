@@ -80,6 +80,8 @@ Find a reference to all subcommands in the [Commands](docs/Commands.md) document
 * **Concurrent invocations.** The moment the configuration is loaded (before any subcommand runs), `bean-ai` takes an exclusive advisory lock on your main Beancount file (`beancount.main_file`) and holds it for the duration of the whole subcommand.  If you run `bean-ai` in one terminal while another `bean-ai` (or any other process holding that lock) is still working, the second one prints a notice to standard error and then waits until the first one is done, instead of the two trampling each other's data.  In effect, data-modifying commands queue up one behind the other.
 * **Crash-during-write.** Every Beancount file write is flushed and pushed all the way to disk (`fsync`ed) before `bean-ai` moves on, so a crash or power loss cannot leave a half-written ledger.
 
+**Do not independently edit any Beancount file** while any `bean-ai` routine that may modify a Beancount file is running.  `bean-ai` has no way to locking you out from editing a file while it is doing work on the same file.  If you do edit files before `bean-ai` is done with them, you run the risk of corrupting them.
+
 ### Naming convention for receipt files
 
 Imported receipts are saved under `<beancount_folder>/<account_with_slashes>/` with the naming pattern:
