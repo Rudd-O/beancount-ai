@@ -44,7 +44,7 @@ beancount-ai/
     └── display.py                             # colored unified-diff printing
 ```
 
-Tox (`tox --current-env`) is the test framework, and it runs Ruff, MyPy and pytest.
+Tox (`tox --current-env`) is the test framework; it runs doctests, pytest, Ruff and MyPy.
 You can invoke the entire suite of tests using command `make qa`.  If you are iterating
 through code changes, first run `pytest -vv` in the project directory to verify much more
 quickly which tests are failing.  When those tests are passing, make use of `make qa`
@@ -61,7 +61,7 @@ to catch further problems with the code.
 **bean-ai** — runs on the VM with Beancount data. CLI subcommands:
 - `bean-ai list-uningested` / `list-unassociated`  → print receipt filenames (one per line)
 - `bean-ai process <file>` → streams LLM response, prints parsed Beancount tx to stdout
-- `bean-ai refine <file_path> <first_line_number> [last_line_number]` → refine one or more transactions using their linked documents
+- `bean-ai refine <file_path> <target>...` → refine one or more transactions using their linked documents; each target is a 1-based line number (N) or an inclusive line range (A-B); targets must be strictly ascending and non-overlapping (see docs/specs/Refine multi-range target specification.md)
 - `bean-ai ingest` / `import <filename>` / `associate` / `fetch` / `remove` / `organize`
 
 Default config: `~/.config/bean-ai.json`. Both clients also support `--config <path>` and `$BEAN_AI_CONFIG`.
@@ -108,4 +108,4 @@ Client has the ability to send stdin to server, and server can respond via stdou
 - Config is a singleton per process: calling `Configuration.load()` a second time returns the first result silently. If testing different configs, use separate processes or `--config`.
 - `BeancountConfiguration` takes an exclusive advisory lock on `main_file` as soon as it is instantiated (and `Configuration.load()` instantiates it). The lock is held until `unlock()` or process exit, so data-modifying subcommands queue up. Consequences: `main_file` must exist at config load time (a missing file raises `FileNotFoundError`); tests that build multiple configs pointing at the same file in one process will block; and two concurrent `bean-ai` invocations against the same file serialize.
 - Server emits JSONL with no buffering delay (flushes every 10 chunks). Over qrexec this can be slow; client handles line-by-line reading.
-- `bean-ai refine` refines a *range* of transactions: with `first_line_number`/`last_line_number` it targets every transaction that *begins* on a line within that (inclusive) span; a line number may point at any line *within* a transaction. It writes the file once, at the end, only if at least one accepted refinement changed it.
+- `bean-ai refine` refines one or more transactions: you can indicate which transactions to refine by referring to a line number (selects the transaction containing it) or a range A-B (selects every transaction that *begins* on a line within the inclusive span); a line number may point at any line *within* a transaction; lines / ranges must be strictly ascending and non-overlapping. It writes the file once, at the end, only if at least one accepted refinement changed it.

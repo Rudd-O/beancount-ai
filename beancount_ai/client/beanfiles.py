@@ -1,6 +1,5 @@
 """Raw Beancount file operations.  Query-related code is in beancount_loader.py."""
 
-import itertools
 import os
 import re
 from datetime import date
@@ -99,11 +98,15 @@ def extract_document_paths(tx_block: list[str]) -> list[str]:
     return paths
 
 
+type FileBlock = tuple[bool, int, list[str]]
+type FileBlocks = list[FileBlock]
+
+
 def split_into_transactions_by_range(  # noqa: C901
     tx_lines: list[str],
     start_line: int,
     end_line: int | None = None,
-) -> list[tuple[bool, list[str]]]:
+) -> FileBlocks:
     """Split at the given range the supplied list of lines (Beancount data) into transaction / non-transaction groups.
 
     Arguments:
@@ -120,8 +123,11 @@ def split_into_transactions_by_range(  # noqa: C901
 
     Returns:
       A list of tuples where each item is:
-        (True, lines): a list of lines corresponding to a transaction found
-        (False, lines): a list of lines that do not belong to any transaction
+        (True, lineno, lines): a list of consecutive lines corresponding to a single transaction;
+        each transaction is its own group, even when consecutive transactions have no
+        blank line between them
+        (False, lineno, lines): a list of consecutive lines that do not belong to any transaction
+      lineno is the start line number of the list of lines in the block
 
     Comments above or below a transaction are not considered part of the transaction in this iteration of the code.
 
@@ -136,13 +142,13 @@ def split_into_transactions_by_range(  # noqa: C901
     ...
     ... 2026-01-03 balance Assets:Bank 15400000 CHF
     ... \""".splitlines(True)
-    >>> split_into_transactions_by_range(data, 1)[1][1]
+    >>> split_into_transactions_by_range(data, 1)[1][2]
     ['2026-01-01 * "Beans"\\n', '  Expenses:Beans 1000 CHF\\n', '  Assets:Bank\\n']
-    >>> split_into_transactions_by_range(data, 7,)[1][1]
+    >>> split_into_transactions_by_range(data, 7,)[1][2]
     ['2026-01-02 * "More beans"\\n', '  Expenses:Beans 500 CHF\\n', '  Assets:Bank\\n']
-    >>> split_into_transactions_by_range(data, 8)[0][1][-1]
+    >>> split_into_transactions_by_range(data, 8)[0][2][-1]
     '2026-01-03 balance Assets:Bank 15400000 CHF\\n'
-    >>> split_into_transactions_by_range(data, 9)[0][1][-1]
+    >>> split_into_transactions_by_range(data, 9)[0][2][-1]
     '2026-01-03 balance Assets:Bank 15400000 CHF\\n'
     """
     if end_line is None:
@@ -167,56 +173,132 @@ def split_into_transactions_by_range(  # noqa: C901
     initial_number_regex = re.compile(r"^[1-9]")
     initial_whitespace_regex = re.compile(r"^(\s+)")
 
-    in_middle_of_transaction = False
+    def is_transaction_header(ln: str) -> bool:
+        fields = ln.split()
+        return (
+            initial_number_regex.match(ln) is not None
+            and len(fields) > 2
+            and len(fields[1]) == 1
+        )
+
     # Start with the first lookbehind.  Look at the current line.
     curr_line = start_line
     for curr_line in range(start_line, -1, -1):
         ln = tx_lines[curr_line]
-        fields = ln.split()
-        if initial_number_regex.match(ln):
-            if len(fields) > 2 and len(fields[1]) == 1:
-                # Found the start of the transaction.
-                in_middle_of_transaction = True
-                break
-            else:
-                # We didn't start at a transaction, so we stop here.
-                break
-        elif initial_whitespace_regex.match(ln):
-            if ln.strip():
-                # We may be in the middle of a transaction, because there appears to
-                # be text starting by whitespace.  Look one line back back.
-                continue
-            else:
-                break
+        if is_transaction_header(ln):
+            # Found the start of the transaction.
+            break
+        if initial_whitespace_regex.match(ln) and ln.strip():
+            # We may be in the middle of a transaction, because there appears to
+            # be text starting by whitespace.  Look one line back.
+            continue
+        # We didn't start at a transaction, so we stop here.
         break
 
-    intermediate: list[tuple[bool, str]] = []
-    intermediate.extend((False, ln) for ln in tx_lines[:curr_line])
+    in_middle_of_transaction = False
+    intermediate: list[tuple[bool, str, int]] = []
+    intermediate.extend((False, ln, 0) for ln in tx_lines[:curr_line])
 
-    for curr_line in range(curr_line, len(tx_lines)):
-        ln = tx_lines[curr_line]
-        fields = ln.split()
-        if initial_number_regex.match(ln):
-            if len(fields) > 2 and len(fields[1]) == 1:
-                # Found the start of a transaction.
-                if curr_line <= end_line:
-                    # This start of the transaction is within the range!
-                    in_middle_of_transaction = True
+    for cln in range(curr_line, len(tx_lines)):
+        ln = tx_lines[cln]
+        if is_transaction_header(ln):
+            if cln <= end_line:
+                # Found the start of a transaction within the range.
+                in_middle_of_transaction = True
             else:
                 in_middle_of_transaction = False
         elif initial_whitespace_regex.match(ln) and ln.strip():
-            # If we were before in a transaction, we continue to be in the middle
-            # of a transaction.  Look forward.
+            # An indented, non-blank line: if we were in a transaction, we
+            # continue to be in the middle of one.  Look forward.
             in_middle_of_transaction = in_middle_of_transaction
         else:
             in_middle_of_transaction = False
-        intermediate.append((in_middle_of_transaction, ln))
+        intermediate.append((in_middle_of_transaction, ln, cln))
 
-    result: list[tuple[bool, list[str]]] = []
-
-    for is_tran, lines in itertools.groupby(intermediate, lambda m: m[0]):
-        result.append((is_tran, [ln[1] for ln in lines]))
+    # Fold the per-line flags into blocks.  As with a plain run-based
+    # grouping, consecutive lines sharing a flag coalesce; the one difference
+    # is that a run of transaction lines is further split at every transaction
+    # header, so that two adjacent transactions (no blank line between them)
+    # are emitted as separate blocks rather than merged into one.
+    result: FileBlocks = []
+    for is_tran, ln, cln in intermediate:
+        # A new block starts when the flag changes, or when, inside a
+        # transaction run, we hit a further transaction header (so adjacent
+        # transactions each become their own block).
+        same_block = (
+            result
+            and result[-1][0] == is_tran
+            and not (is_tran and is_transaction_header(ln))
+        )
+        if same_block:
+            result[-1][2].append(ln)
+        else:
+            result.append((is_tran, cln, [ln]))
     return result
+
+
+def classify_by_target_spans(
+    tx_lines: list[str], spans: list[tuple[int, int]]
+) -> list[tuple[bool, int, list[str]]]:
+    """Classify an entire Beancount document, flagging the transactions selected by *spans*.
+
+    Each span is a (zero-based, inclusive) ``(start, end)`` pair built from one
+    user-supplied target token:
+
+    - a single-line token ``N`` becomes span ``(N-1, N-1)`` and selects the
+      transaction *containing* line ``N`` (walk-back semantics: pointing into
+      the middle of a transaction selects the whole transaction);
+    - a range token ``A-B`` becomes span ``(A-1, B-1)`` and selects every
+      transaction that *begins* on a line between ``A`` and ``B`` (inclusive),
+      plus the transaction containing line ``A`` itself when ``A`` points into
+      the middle of one (that transaction is included whole, even if its body
+      extends past ``B``).
+
+    A transaction selected by more than one span is flagged exactly once.  The
+    returned groups cover the whole document: flattening them back together
+    (``"".join`` of every line) reproduces the input byte-for-byte.  Every
+    group that is not a selected transaction is returned as a non-transaction
+    group, so callers can rebuild the file by substitution.
+
+    Since the base classifier emits at most one transaction per group, every
+    ``True`` group in the output corresponds to exactly one transaction, even
+    when two transactions have no blank line between them.
+
+    >>> doc = (
+    ...     '2026-01-01 * "Beans"\\n'
+    ...     "  Expenses:Beans 1000 CHF\\n"
+    ...     "  Assets:Bank\\n"
+    ...     "\\n"
+    ...     '2026-01-02 * "More beans"\\n'
+    ...     "  Expenses:Beans 500 CHF\\n"
+    ...     "  Assets:Bank\\n"
+    ... ).splitlines(True)
+    >>> [t for t, _, _ in classify_by_target_spans(doc, [(1, 1)])]
+    [True, False, False]
+    >>> [t for t, _, _ in classify_by_target_spans(doc, [(0, 4)])]
+    [True, False, True]
+    >>> [t for t, _, _ in classify_by_target_spans(doc, [(3, 3)])]
+    [False, False, False]
+    >>> "".join(ln for _, _, ls in classify_by_target_spans(doc, [(0, 4)]) for ln in ls) == "".join(doc)
+    True
+    """
+    if not tx_lines:
+        return []
+    return [
+        (
+            is_tx
+            and any(
+                s <= start_lineno <= e
+                or start_lineno <= s <= start_lineno + len(lines) - 1
+                for s, e in spans
+            ),
+            start_lineno,
+            lines,
+        )
+        for is_tx, start_lineno, lines in split_into_transactions_by_range(
+            tx_lines, 0, len(tx_lines) - 1
+        )
+    ]
 
 
 def split_at_transaction_by_line_number(  # noqa: C901
@@ -262,7 +344,7 @@ def split_at_transaction_by_line_number(  # noqa: C901
     before: list[str] = []
     transaction: list[str] = []
     after: list[str] = []
-    for istran, lines in res:
+    for istran, _lineno, lines in res:
         if istran:
             if transaction:
                 after.extend(lines)

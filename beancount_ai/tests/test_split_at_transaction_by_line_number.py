@@ -22,6 +22,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from beancount_ai.client.beanfiles import (
+    FileBlocks,
+    classify_by_target_spans,
     split_at_transaction_by_line_number,
     split_into_transactions_by_range,
 )
@@ -412,9 +414,9 @@ def test_split_into_transactions_by_range_start_in_middle_of_transaction(
 ) -> None:
     res = split_into_transactions_by_range(beancount_lines, start_line=TX_1_DATE + 1)
     assert res[0][0] is False
-    assert len(res[0][1]) == TX_1_DATE
+    assert len(res[0][2]) == TX_1_DATE
     assert res[1][0] is True
-    assert len(res[1][1]) == TX_1_LEN
+    assert len(res[1][2]) == TX_1_LEN
 
 
 # ===========================================================================
@@ -483,9 +485,9 @@ class TestSplitByRangeSingle:
         # start at TX1's date line.
         res = split_into_transactions_by_range(beancount_lines, TX_1_DATE)
         assert res == [
-            (False, beancount_lines[:TX_1_DATE]),
-            (True, beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]),
-            (False, beancount_lines[TX_1_DATE + TX_1_LEN :]),
+            (False, 0, beancount_lines[:TX_1_DATE]),
+            (True, TX_1_DATE, beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]),
+            (False, TX_1_DATE + TX_1_LEN, beancount_lines[TX_1_DATE + TX_1_LEN :]),
         ]
 
     def test_explicit_end_equal_to_start_matches_default(
@@ -502,7 +504,7 @@ class TestSplitByRangeSingle:
         res = split_into_transactions_by_range(
             beancount_lines, TX_1_DATE + TX_1_LEN - 1
         )
-        tx = next(l for t, l in res if t)
+        tx = next(l for t, _, l in res if t)
         assert tx == beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]
 
     def test_start_deep_in_transaction_returns_same_tx(
@@ -511,14 +513,16 @@ class TestSplitByRangeSingle:
         # Deeply indented line of TX2 walks back to TX2's date line.
         mid_res = split_into_transactions_by_range(beancount_lines, TX_2_DEEP)
         date_res = split_into_transactions_by_range(beancount_lines, TX_2_DATE)
-        assert next(l for t, l in mid_res if t) == next(l for t, l in date_res if t)
+        assert next(l for t, _, l in mid_res if t) == next(
+            l for t, _, l in date_res if t
+        )
 
     def test_start_on_indented_comment_within_tx(
         self, beancount_lines: list[str]
     ) -> None:
         # An indented comment line counts as part of its enclosing transaction.
         res = split_into_transactions_by_range(beancount_lines, 69)
-        tx = next(l for t, l in res if t)
+        tx = next(l for t, _, l in res if t)
         assert tx[0] == beancount_lines[TX_6_DATE]
         assert tx[-1] == beancount_lines[TX_6_LAST]
 
@@ -534,17 +538,17 @@ class TestSplitByRangeNoTransaction:
 
     def test_start_on_directive_first_line(self, beancount_lines: list[str]) -> None:
         res = split_into_transactions_by_range(beancount_lines, 0)
-        assert res == [(False, list(beancount_lines))]
+        assert res == [(False, 0, list(beancount_lines))]
 
     def test_start_on_section_comment(self, beancount_lines: list[str]) -> None:
         # index 37 = "; This red bull has been accounted for." (unindented comment)
         res = split_into_transactions_by_range(beancount_lines, 37)
-        assert res == [(False, list(beancount_lines))]
+        assert res == [(False, 0, list(beancount_lines))]
 
     def test_start_on_blank_gap_line(self, beancount_lines: list[str]) -> None:
         # index 25 is the second blank line of the gap between TX1 and TX2.
         res = split_into_transactions_by_range(beancount_lines, 25)
-        assert res == [(False, list(beancount_lines))]
+        assert res == [(False, 0, list(beancount_lines))]
 
     def test_balance_directive_inline_doc(
         self,
@@ -553,7 +557,7 @@ class TestSplitByRangeNoTransaction:
             "2030-01-01 balance Assets:Bank 0 CHF\n",
             "2024-01-01 open Assets:Bank CHF\n",
         ]
-        assert split_into_transactions_by_range(doc, 0) == [(False, list(doc))]
+        assert split_into_transactions_by_range(doc, 0) == [(False, 0, list(doc))]
 
     def test_directives_only_inline_doc(
         self,
@@ -562,7 +566,7 @@ class TestSplitByRangeNoTransaction:
             "2023-01-01 open Assets:Bank CHF\n",
             "2030-01-01 balance Assets:Bank 0 CHF\n",
         ]
-        assert split_into_transactions_by_range(doc, 0) == [(False, list(doc))]
+        assert split_into_transactions_by_range(doc, 0) == [(False, 0, list(doc))]
 
     def test_orphaned_indented_line_at_top(
         self,
@@ -574,7 +578,7 @@ class TestSplitByRangeNoTransaction:
             "  End:1 CHF\n",
         ]
         res = split_into_transactions_by_range(doc, 0, 0)
-        assert res == [(False, list(doc))]
+        assert res == [(False, 0, list(doc))]
 
 
 # ===========================================================================
@@ -593,7 +597,7 @@ class TestSplitByRangeEndLine:
         # end lands mid-body of TX1; the whole TX1 is still returned intact.
         for end in range(TX_1_DATE, TX_1_DATE + TX_1_LEN):
             res = split_into_transactions_by_range(beancount_lines, TX_1_DATE, end)
-            tx = next(l for t, l in res if t)
+            tx = next(l for t, _, l in res if t)
             assert tx == beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]
 
     def test_end_excludes_later_tx_starting_after_it(
@@ -602,14 +606,14 @@ class TestSplitByRangeEndLine:
         # end=19 lands on TX1's date line, so only TX1 is flagged; TX2 (date 29)
         # starts after end and is excluded even though it follows later in the file.
         res = split_into_transactions_by_range(beancount_lines, 0, TX_1_DATE)
-        flagged = [l for t, l in res if t]
+        flagged = [l for t, _, l in res if t]
         assert len(flagged) == 1
         assert flagged[0] == beancount_lines[TX_1_DATE : TX_1_DATE + TX_1_LEN]
 
     def test_end_inclusive_at_later_tx_start(self, beancount_lines: list[str]) -> None:
         # With end exactly on TX2's date line, TX2 is now flagged.
         res = split_into_transactions_by_range(beancount_lines, 37, TX_3_DATE)
-        tx = next(l for t, l in res if t)
+        tx = next(l for t, _, l in res if t)
         assert tx[0] == beancount_lines[TX_3_DATE]
 
     def test_default_end_does_not_flag_later_tx(
@@ -619,7 +623,7 @@ class TestSplitByRangeEndLine:
         # start_line; later transactions (e.g. TX6 at the end of the file) stay
         # non-transaction.
         res = split_into_transactions_by_range(beancount_lines, TX_2_DATE)
-        assert sum(1 for t, _ in res if t) == 1
+        assert sum(1 for t, _, _ in res if t) == 1
 
 
 # ===========================================================================
@@ -631,32 +635,33 @@ class TestSplitByRangeMultiple:
     def test_range_spanning_three_tx_groups(self, beancount_lines: list[str]) -> None:
         res = split_into_transactions_by_range(beancount_lines, TX_1_DATE, TX_3_DATE)
         assert len(res) == 7
-        assert [t for t, _ in res] == [False, True, False, True, False, True, False]
+        assert [t for t, _, _ in res] == [False, True, False, True, False, True, False]
         # Each non-empty False group is exactly the gap / comment between the txs.
-        assert res[2][1] == beancount_lines[TX_1_DATE + TX_1_LEN : TX_2_DATE]
-        assert res[4][1] == [beancount_lines[37]]
+        assert res[2][2] == beancount_lines[TX_1_DATE + TX_1_LEN : TX_2_DATE]
+        assert res[4][2] == [beancount_lines[37]]
         # The three transaction groups are the intact txs.
-        assert res[1][1][0] == beancount_lines[TX_1_DATE]
-        assert res[3][1][0] == beancount_lines[TX_2_DATE]
-        assert res[5][1][0] == beancount_lines[TX_3_DATE]
+        assert res[1][2][0] == beancount_lines[TX_1_DATE]
+        assert res[3][2][0] == beancount_lines[TX_2_DATE]
+        assert res[5][2][0] == beancount_lines[TX_3_DATE]
 
     def test_range_start_and_end_on_tx_date_lines(
         self, beancount_lines: list[str]
     ) -> None:
         res = split_into_transactions_by_range(beancount_lines, TX_2_DATE, TX_4_DATE)
-        assert [t for t, _ in res] == [False, True, False, True, False, True, False]
-        dates = [l[0] for t, l in res if t]
+        assert [t for t, _, _ in res] == [False, True, False, True, False, True, False]
+        dates = [l[0] for t, _, l in res if t]
         assert dates == [
             beancount_lines[TX_2_DATE],
             beancount_lines[TX_3_DATE],
             beancount_lines[TX_4_DATE],
         ]
 
-    def test_adjacent_txs_no_separator_merge_into_one_group(
+    def test_adjacent_txs_no_separator_get_own_groups(
         self,
     ) -> None:
-        # No blank line between the two transactions, so groupby() coalesces
-        # them into a single True group.
+        # No blank line between the two transactions: even though the per-line
+        # flags form a single run, each transaction is emitted as its own
+        # (flagged) group, so targeting one does not flag the other.
         doc = [
             '2023-01-01 * "A"\n',
             "  A:1 CHF\n",
@@ -664,7 +669,21 @@ class TestSplitByRangeMultiple:
             "  B:1 CHF\n",
         ]
         res = split_into_transactions_by_range(doc, 0, 3)
-        assert res == [(True, list(doc))]
+        assert res == [(True, 0, doc[:2]), (True, 2, doc[2:])]
+
+    def test_adjacent_unflagged_txs_still_merge(
+        self,
+    ) -> None:
+        # When the second transaction's header begins past end_line it is not
+        # flagged, and unflagged lines coalesce into one group as before.
+        doc = [
+            '2023-01-01 * "A"\n',
+            "  A:1 CHF\n",
+            '2023-01-02 * "B"\n',
+            "  B:1 CHF\n",
+        ]
+        res = split_into_transactions_by_range(doc, 0, 1)
+        assert res == [(True, 0, doc[:2]), (False, 2, doc[2:])]
 
 
 # ===========================================================================
@@ -673,12 +692,31 @@ class TestSplitByRangeMultiple:
 
 
 class TestSplitByRangeInvariants:
-    def test_groups_alternate(self, beancount_lines: list[str]) -> None:
+    def test_groups_alternate_when_txs_are_separated(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # TX1, TX2 and TX3 are separated by blank lines / a comment, so
+        # flags still alternate here.
         res = split_into_transactions_by_range(beancount_lines, TX_1_DATE, TX_3_DATE)
-        flags = [t for t, _ in res]
+        flags = [t for t, _, _ in res]
         assert flags == [False, True, False, True, False, True, False]
         assert flags[0] is False
         assert all(a is not b for a, b in zip(flags, flags[1:]))
+
+    def test_adjacent_fixture_transactions_are_separate_groups(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # TX4 and TX5 have no blank line between them (TX5's date line
+        # immediately follows TX4's last line), yet they are not merged:
+        # each transaction is its own True group.
+        assert TX_5_DATE == TX_4_DATE + 7
+        res = split_into_transactions_by_range(beancount_lines, TX_4_DATE, TX_5_DATE)
+        flags = [t for t, _, _ in res]
+        assert flags == [False, True, True, False]
+        assert res[1][2] == beancount_lines[TX_4_DATE : TX_5_DATE]
+        # TX5 runs from its date line to index 60 (line 61 in the editor);
+        # index 61 is the blank line separating it from TX6.
+        assert res[2][2] == beancount_lines[TX_5_DATE:61]
 
     def test_flattening_reconstructs_document(self, beancount_lines: list[str]) -> None:
         # Groups preserve the original lines verbatim and in order: rejoining
@@ -694,4 +732,163 @@ class TestSplitByRangeInvariants:
             (0, len(beancount_lines) - 1),
         ]:
             res = split_into_transactions_by_range(beancount_lines, start, end)  # pyright: ignore[reportUnknownArgumentType]
-            assert "".join(ln for _, grp in res for ln in grp) == source
+            assert "".join(ln for _, _, grp in res for ln in grp) == source
+
+
+# ===========================================================================
+# classify_by_target_spans
+# ===========================================================================
+
+
+def _flagged_groups(res: FileBlocks) -> list[list[str]]:
+    return [lines for is_tx, _, lines in res if is_tx]
+
+
+def _all_transactions(beancount_lines: list[str]) -> list[tuple[int, list[str]]]:
+    """Enumerate every transaction of the document as (abs_start, lines), in
+    file order, with consecutive unseparated transactions kept as separate
+    items (each item is exactly one transaction, starting on its date line)."""
+    n = len(beancount_lines)
+    full = split_into_transactions_by_range(beancount_lines, 0, n - 1)
+    out: list[tuple[int, list[str]]] = []
+    for is_tx, lineno, lines in full:
+        if is_tx:
+            out.append((lineno, lines))
+    return out
+
+
+class TestClassifyByTargetSpans:
+    def test_single_line_in_transaction_selects_that_tx(
+        self, beancount_lines: list[str]
+    ) -> None:
+        res = classify_by_target_spans(beancount_lines, [(TX_2_DEEP, TX_2_DEEP)])
+        flagged = _flagged_groups(res)
+        expected = split_at_transaction_by_line_number(TX_2_DEEP, beancount_lines)[1]
+        assert flagged == [expected]
+        # The flagged group is the transaction whole, beginning at its date line.
+        assert flagged[0][0] == beancount_lines[TX_2_DATE]
+
+    def test_single_line_flags_exactly_that_transaction(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # A single-line target flags exactly the transaction containing that
+        # line (walk-back semantics), never any other transaction.
+        for idx in (TX_1_DATE, TX_2_DATE, TX_2_DEEP, TX_5_DEEP, TX_6_DEEP):
+            expected = split_at_transaction_by_line_number(idx, beancount_lines)[1]
+            flagged = _flagged_groups(
+                classify_by_target_spans(beancount_lines, [(idx, idx)])
+            )
+            assert flagged == [expected]
+
+    def test_range_selects_exactly_the_right_transactions(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # A range target selects every transaction beginning within [start,
+        # end], plus the transaction containing the start line itself when it
+        # points into the middle of one (walk-back).
+        all_txs = _all_transactions(beancount_lines)
+        for start, end in [
+            (TX_1_DATE, TX_3_DATE),
+            (TX_2_DATE, TX_5_DATE),
+            (TX_3_DATE, TX_3_DATE),
+            (TX_2_DEEP, TX_4_DATE),
+        ]:
+            expected = [(s, tx) for s, tx in all_txs if s <= end and start <= s]
+            containing = split_at_transaction_by_line_number(start, beancount_lines)[1]
+            if containing not in [tx for _, tx in expected]:
+                expected.append(
+                    (next(s for s, tx in all_txs if tx == containing), containing)
+                )
+            expected.sort(key=lambda pair: pair[0])
+            flagged = _flagged_groups(
+                classify_by_target_spans(beancount_lines, [(start, end)])
+            )
+            assert flagged == [tx for _, tx in expected]
+
+    def test_multiple_disjoint_spans_flag_each(
+        self, beancount_lines: list[str]
+    ) -> None:
+        res = classify_by_target_spans(
+            beancount_lines, [(TX_1_DATE, TX_1_DATE), (TX_4_DATE, TX_4_DATE)]
+        )
+        flagged = _flagged_groups(res)
+        dates = [g[0] for g in flagged]
+        assert dates == [beancount_lines[TX_1_DATE], beancount_lines[TX_4_DATE]]
+
+    def test_mixed_single_and_range_spans(self, beancount_lines: list[str]) -> None:
+        res = classify_by_target_spans(
+            beancount_lines,
+            [(TX_1_DATE, TX_1_DATE), (TX_3_DATE, TX_4_DATE), (TX_6_DEEP, TX_6_DEEP)],
+        )
+        dates = [g[0] for g in _flagged_groups(res)]
+        assert dates == [
+            beancount_lines[TX_1_DATE],
+            beancount_lines[TX_3_DATE],
+            beancount_lines[TX_4_DATE],
+            beancount_lines[TX_6_DATE],
+        ]
+
+    def test_single_line_outside_any_transaction_flags_nothing(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # Index 37 is the unindented comment between TX2 and TX3.
+        res = classify_by_target_spans(beancount_lines, [(37, 37)])
+        assert _flagged_groups(res) == []
+        assert "".join(ln for _, _, grp in res for ln in grp) == "".join(
+            beancount_lines
+        )
+
+    def test_full_file_span_selects_every_transaction(
+        self, beancount_lines: list[str]
+    ) -> None:
+        res = classify_by_target_spans(beancount_lines, [(0, len(beancount_lines) - 1)])
+        dates = [g[0] for g in _flagged_groups(res)]
+        for d in (TX_1_DATE, TX_2_DATE, TX_3_DATE, TX_4_DATE, TX_5_DATE, TX_6_DATE):
+            assert beancount_lines[d] in dates
+
+    def test_overlapping_spans_flag_each_tx_once(
+        self, beancount_lines: list[str]
+    ) -> None:
+        # Overlaps are rejected by the command-line validation, but the
+        # classifier itself must flag a transaction at most once.
+        res = classify_by_target_spans(
+            beancount_lines, [(TX_2_DATE, TX_3_DATE), (TX_2_DATE, TX_5_DATE)]
+        )
+        dates = [g[0] for g in _flagged_groups(res)]
+        assert dates == [
+            beancount_lines[TX_2_DATE],
+            beancount_lines[TX_3_DATE],
+            beancount_lines[TX_4_DATE],
+            beancount_lines[TX_5_DATE],
+        ]
+
+    def test_empty_document(self) -> None:
+        assert classify_by_target_spans([], [(0, 0)]) == []
+
+    def test_adjacent_txs_are_subsplit_into_own_groups(self) -> None:
+        # No blank line between the transactions, so the base classifier merges
+        # them; classify_by_target_spans must still split them back apart so
+        # that targeting the second transaction does not flag the first.
+        doc = [
+            '2023-01-01 * "A"\n',
+            "  A:1 CHF\n",
+            '2023-01-02 * "B"\n',
+            "  B:1 CHF\n",
+        ]
+        res = classify_by_target_spans(doc, [(0, 1)])
+        assert res == [(True, 0, doc[:2]), (False, 2, doc[2:])]
+        res = classify_by_target_spans(doc, [(2, 3)])
+        assert res == [(False, 0, doc[:2]), (True, 2, doc[2:])]
+        res = classify_by_target_spans(doc, [(0, 0)])
+        assert res == [(True, 0, doc[:2]), (False, 2, doc[2:])]
+
+    def test_flattening_reconstructs_document(self, beancount_lines: list[str]) -> None:
+        source = "".join(beancount_lines)
+        for spans in [
+            [(TX_1_DATE, TX_1_DATE)],
+            [(TX_1_DATE, TX_2_DEEP), (TX_5_DATE, TX_5_DEEP)],
+            [(0, len(beancount_lines) - 1)],
+            [(37, 37)],
+        ]:
+            res = classify_by_target_spans(beancount_lines, spans)
+            assert "".join(ln for _, _, grp in res for ln in grp) == source

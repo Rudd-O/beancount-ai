@@ -109,11 +109,11 @@ def test_do_refine_writes_refined_block(
     )
     args = argparse.Namespace(
         file_path=str(tmp_path / "main.bean"),
-        first_line_number=2,
+        targets=[(2, 2)],
         yes=True,
         no=False,
-        last_line_number=None,
         clear=False,
+        only_show_affected=False,
     )
 
     refine.run(cfg, args)
@@ -146,11 +146,11 @@ def test_do_refine_no_flag_does_not_write(
     original = (tmp_path / "main.bean").read_text(encoding="utf-8")
     args = argparse.Namespace(
         file_path=str(tmp_path / "main.bean"),
-        first_line_number=2,
+        targets=[(2, 2)],
         yes=False,
         no=True,
-        last_line_number=None,
         clear=False,
+        only_show_affected=False,
     )
     refine.run(cfg, args)
     assert (tmp_path / "main.bean").read_text(encoding="utf-8") == original
@@ -163,11 +163,11 @@ def test_do_refine_missing_file(
     cfg = _make_config(tmp_path)
     args = argparse.Namespace(
         file_path=str(tmp_path / "nope.bean"),
-        first_line_number=1,
+        targets=[(1, 1)],
         yes=True,
         no=False,
-        last_line_number=None,
         clear=False,
+        only_show_affected=False,
     )
     with pytest.raises(SystemExit):
         refine.run(cfg, args)
@@ -182,11 +182,11 @@ def test_do_refine_line_not_in_transaction(
     b4 = (tmp_path / "main.bean").read_text()
     args = argparse.Namespace(
         file_path=str(tmp_path / "main.bean"),
-        first_line_number=1,
+        targets=[(1, 1)],
         yes=True,
         no=False,
-        last_line_number=None,
         clear=False,
+        only_show_affected=False,
     )
     refine.run(cfg, args)
     af = (tmp_path / "main.bean").read_text()
@@ -202,11 +202,11 @@ def test_do_refine_malformed_llm_output(
     fake_call["llm_output"] = "not json at all"
     args = argparse.Namespace(
         file_path=str(tmp_path / "main.bean"),
-        first_line_number=2,
+        targets=[(2, 2)],
         yes=True,
         no=False,
-        last_line_number=None,
         clear=False,
+        only_show_affected=False,
     )
     with pytest.raises(SystemExit):
         refine.run(cfg, args)
@@ -222,11 +222,11 @@ def test_do_refine_interactive_no(
     original = (tmp_path / "main.bean").read_text(encoding="utf-8")
     args = argparse.Namespace(
         file_path=str(tmp_path / "main.bean"),
-        first_line_number=2,
+        targets=[(2, 2)],
         yes=False,
         no=False,
-        last_line_number=None,
         clear=False,
+        only_show_affected=False,
     )
     with mock.patch.object(refine, "input", side_effect=["n"]):
         refine.run(cfg, args)

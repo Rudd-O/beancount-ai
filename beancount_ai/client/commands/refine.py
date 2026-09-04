@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import cast
 
 from beancount_ai.client.beanfiles import (
+    FileBlocks,
+    classify_by_target_spans,
     extract_document_paths,
     resolve_local_document_path,
-    split_into_transactions_by_range,
     write_beancount_file,
 )
 from beancount_ai.client.config import Configuration
@@ -26,6 +27,72 @@ from beancount_ai.client.server import (
 from beancount_ai.structs import RefineRequest, RefineRequestDocument
 
 _TX_HEADER_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2} [*!D]\s")
+_TARGET_REGEX = re.compile(r"^([1-9][0-9]*)(?:-([1-9][0-9]*))?$")
+
+
+def parse_target(token: str) -> tuple[int, int]:
+    """Parse one target token from the command line into a 1-based (start, end) pair.
+
+    A token is either a single line number ("42" -> (42, 42), meaning the
+    transaction containing that line) or an inclusive range ("12-45" ->
+    (12, 45), meaning every transaction beginning between the two lines).
+    """
+    m = _TARGET_REGEX.match(token)
+    if m is None:
+        raise argparse.ArgumentTypeError(
+            f"invalid target {token!r}: expected a 1-based line number (N) or an "
+            "inclusive range of line numbers (A-B)"
+        )
+    start = int(m.group(1))
+    end = int(m.group(2)) if m.group(2) is not None else start
+    if end < start:
+        raise argparse.ArgumentTypeError(
+            f"invalid target {token!r}: range end must be greater than or equal to its start"
+        )
+    return (start, end)
+
+
+def _fmt_target(start: int, end: int) -> str:
+    return f"{start}" if start == end else f"{start}-{end}"
+
+
+def validate_target_ranges(
+    targets: list[tuple[int, int]], n_lines: int
+) -> list[tuple[int, int]]:
+    """Validate user-supplied 1-based inclusive target spans; raises ValueError.
+
+    Rules:
+      - every span's line numbers must be within the file (1..n_lines);
+      - spans must be strictly ascending: each subsequent span must begin
+        after the previous one begins;
+      - spans must not overlap: each subsequent span must begin strictly
+        after the previous one ends (spans may be contiguous: 1-500 and
+        501-1000 do not overlap).
+    """
+    if not targets:
+        raise ValueError("at least one target is required")
+    for idx, (start, end) in enumerate(targets, start=1):
+        if start > n_lines or end > n_lines:
+            raise ValueError(
+                f"target range {_fmt_target(start, end)} out of file bounds "
+                f"(file has {n_lines} lines)"
+            )
+    prev_start, prev_end = targets[0]
+    for idx, (start, end) in enumerate(targets[1:], start=2):
+        if start <= prev_start:
+            raise ValueError(
+                f"target ranges are not strictly ascending and non-overlapping: "
+                f"range #{idx - 1} ({_fmt_target(prev_start, prev_end)}) and range "
+                f"#{idx} ({_fmt_target(start, end)}) — a later range must begin "
+                "after the earlier one"
+            )
+        if start <= prev_end:
+            raise ValueError(
+                f"target ranges are not strictly ascending and non-overlapping: "
+                f"range #{idx - 1} ({_fmt_target(prev_start, prev_end)}) and range "
+                f"#{idx} ({_fmt_target(start, end)}) — ranges must not overlap"
+            )
+    return targets
 
 
 def preview_local_document(doc_path: str, tx_file: Path, cfg: Configuration) -> None:
@@ -53,14 +120,16 @@ def validate_refined_transaction(rewritten: str) -> bool:
 
 
 def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
-    """Refine an existing Beancount transaction using its linked documents.
+    """Refine existing Beancount transactions using their linked documents.
 
-    The user points at a transaction by file path and 1-based line number.  The
-    client extracts the transaction block, gathers the client-local documents
-    linked in its metadata, sends them (base64-encoded) to the server over the
-    standard transport, and asks the LLM for a rewritten transaction.  A colored
-    diff is shown and, depending on the flags / the user's answer, the change is
-    applied (replacing only the target transaction block) or discarded.
+    The user points at one or more transactions by file path plus one or more
+    1-based line number / line range targets (e.g. ``bean-ai refine f.bean 12
+    45-80 100``).  The client extracts every targeted transaction block,
+    gathers the client-local documents linked in their metadata, sends each one
+    (base64-encoded) to the server over the standard transport, and asks the
+    LLM for a rewritten transaction.  A colored diff is shown and, depending
+    on the flags / the user's answer, the change is applied (replacing only
+    the targeted transaction blocks) or discarded.
     """
     # 1. Read the file.
     tx_file = Path(args.file_path)
@@ -69,25 +138,24 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
         sys.exit(1)
     original_lines = tx_file.read_text(encoding="utf-8").splitlines(True)
 
-    # 2. Extract the transaction block, preserving all formatting.
-    #    The helper takes a zero-based index and accepts any line within a tx.
+    # 2. Validate the targets and extract the transaction blocks,
+    #    preserving all formatting.  Targets are 1-based inclusive (start, end)
+    #    pairs; the classifier takes zero-based spans.
     try:
-        blocks = split_into_transactions_by_range(
-            original_lines,
-            args.first_line_number - 1,
-            (None if args.last_line_number is None else args.last_line_number - 1),
-        )
+        validate_target_ranges(args.targets, len(original_lines))
+        spans = [(s - 1, e - 1) for s, e in args.targets]
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+    blocks = classify_by_target_spans(original_lines, spans)
 
-    def collapse_blocks_into_lines(blocks: list[tuple[bool, list[str]]]) -> list[str]:
+    def collapse_blocks_into_lines(blocks: FileBlocks) -> list[str]:
         lns: list[str] = []
-        for _, block in blocks:
+        for _, _, block in blocks:
             lns.extend(block)
         return lns
 
-    def do_refine_one(block_index: int, blocks: list[tuple[bool, list[str]]]) -> None:  # noqa: C901
+    def do_refine_one(block_index: int, blocks: FileBlocks) -> None:  # noqa: C901
         """
         Attempt to refine the supplied transaction.
 
@@ -95,13 +163,26 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
         block index is modified. Else nothing happens.  If the user EOFs
         or chooses to quit, we simply exit the program.
         """
-        # 3. Discover linked documents (document / documentN metadata).
-        tx_block = blocks[block_index][1]
-        print(
-            f"Refining transaction {repr(tx_block[0].strip())} in file {tx_file}",
-            file=sys.stderr,
-        )
+        tx_block = blocks[block_index][2]
+        start_lineno = blocks[block_index][1]
+        if args.only_show_affected:
+            pairs: list[tuple[str, str]] = []
+            n = start_lineno
+            for txline in tx_block:
+                n = n + 1
+                pairs.append((str(n), txline))
+            maxlens = max(len(lnstr) for lnstr, _ in pairs)
+            fmt = "%%%ds" % maxlens
+            for lnstr, txline in pairs:
+                sys.stdout.write(fmt % lnstr + ":" + txline)
+            return
+        else:
+            print(
+                f"Refining transaction {repr(tx_block[0].strip())} in file {tx_file}",
+                file=sys.stderr,
+            )
 
+        # 3. Discover linked documents (document / documentN metadata).
         doc_paths = extract_document_paths(tx_block)
 
         # 4. Collect document contents (client-local, resolved near the tx file).
@@ -188,7 +269,11 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
 
         original_lines = collapse_blocks_into_lines(blocks)
         new_blocks = blocks[:]
-        new_blocks[block_index] = (new_blocks[block_index][0], new_tx_block)
+        new_blocks[block_index] = (
+            new_blocks[block_index][0],
+            start_lineno,
+            new_tx_block,
+        )
         new_lines = collapse_blocks_into_lines(new_blocks)
 
         diff = list(
@@ -212,7 +297,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
             return
 
         if args.yes:
-            blocks[block_index] = (blocks[block_index][0], new_tx_block)
+            blocks[block_index] = (blocks[block_index][0], start_lineno, new_tx_block)
             return
 
         while True:
@@ -233,10 +318,14 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
                 preview_local_document(documents_data[0]["filepath"], tx_file, cfg)
                 continue
             if answer == "y":
-                blocks[block_index] = (blocks[block_index][0], new_tx_block)
+                blocks[block_index] = (
+                    blocks[block_index][0],
+                    start_lineno,
+                    new_tx_block,
+                )
                 break
 
-    for bn, (is_transaction, _) in enumerate(blocks):
+    for bn, (is_transaction, _, _) in enumerate(blocks):
         if is_transaction:
             do_refine_one(bn, blocks)
 
@@ -253,23 +342,24 @@ def subcommand_parser(
 ) -> argparse._SubParsersAction[argparse.ArgumentParser]:  # pyright: ignore[reportPrivateUsage]
     refine_cmd = sp.add_parser(
         "refine",
-        help="Refine one or more existing transactions using its linked documents",
+        help="Refine one or more existing transactions using their linked documents",
     )
     refine_cmd.add_argument(
         "file_path",
-        help="Path to the Beancount file containing the transactions to refifne",
+        help="Path to the Beancount file containing the transactions to refine",
     )
     refine_cmd.add_argument(
-        "first_line_number",
-        help="line number (starts at 1) of any line of the first transaction you want to refine",
-        type=int,
-    )
-    refine_cmd.add_argument(
-        "last_line_number",
-        help="line number of any line of the last transaction you want to refine",
-        type=int,
-        nargs="?",
-        default=None,
+        "targets",
+        nargs="+",
+        type=parse_target,
+        metavar="TARGET",
+        help=(
+            "1-based line number of any line of a transaction to refine (N), or an "
+            "inclusive range of such line numbers (A-B): every transaction beginning "
+            "between the two lines is refined.  Give several targets to batch multiple "
+            "edit operations in one command; they must be strictly ascending and "
+            "non-overlapping."
+        ),
     )
     refine_cmd.add_argument(
         "--clear",
@@ -295,5 +385,13 @@ def subcommand_parser(
         default=False,
         dest="no",
         help="Simulate and display the refinements but don't touch the transaction file",
+    )
+    yes_group.add_argument(
+        "--show-affected",
+        "-s",
+        action="store_true",
+        default=False,
+        dest="only_show_affected",
+        help="Display each transaction that might be modified, then exit",
     )
     return sp

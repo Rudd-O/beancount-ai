@@ -2,6 +2,8 @@
 
 Status: developed.
 
+> **Note on targets:** the CLI argument grammar described in this document (`<file_path> <first_line_number> [last_line_number]`) is superseded by `docs/specs/Refine multi-range target specification.md` (`bean-ai refine <file_path> <target>+`).  Everything else in this document — the client/server flow, the LLM prompt, the wire protocol, diff/prompt/write behavior — still applies.
+
 ## Overview
 
 This feature adds a new `refine` CLI subcommand that rewrites one or more existing Beancount transactions (user-identified by file path and 1-based line number, or a range of lines), using all available information from metadata-linked documents (receipt images in PDF/JPG/PNG formats stored alongside the Beancount data), with the ultimate goal of producing a more detailed transaction than the starting one, while preserving all relevant existing details.

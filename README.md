@@ -58,11 +58,11 @@ bean-ai associate
 
 ```bash
 # rewrites that transaction on line number 157 based on its linked receipt(s)
-bean-ai refine Expenses.beancount 157 # <file_path> <first_line_number>
-# or batch refinement, rewrites multiple transactions between two lines
-bean-ai refine Expenses.beancount 157 408 # <file_path> <first_line_number> <last_line_number>
+bean-ai refine Expenses.beancount 157
+# or batch refinement: any mix of single line numbers and inclusive line ranges
+bean-ai refine Expenses.beancount 157-200 408 500-700
 # --clear additionally sets the flag of every modified transaction to the clear flag (*)
-bean-ai refine Expenses.beancount 157 408 --clear
+bean-ai refine Expenses.beancount 157-200 408 --clear
 ```
 
 Find a reference to all subcommands in the [Commands](docs/Commands.md) documentation.
