@@ -8,7 +8,7 @@
 %define mybuildnumber %{?build_number}%{?!build_number:1}
 
 Name:           python-%{package_name}
-Version:        0.5.0
+Version:        0.6.0
 Release:        %{mybuildnumber}%{?dist}
 Summary:        AI-powered tooling to process Beancount receipts
 
