@@ -73,12 +73,12 @@ class TestValidateTargetRanges:
         assert validate_target_ranges([(10, 10)], 99) == [(10, 10)]
 
     def test_several_disjoint_targets_ok(self) -> None:
-        targets = [(10, 10), (20, 30), (31, 50)]
+        targets: list[tuple[int, int | None]] = [(10, 10), (20, 30), (31, 50)]
         assert validate_target_ranges(targets, 99) == targets
 
     def test_contiguous_targets_ok(self) -> None:
         # 1-500 and 501-1000 are disjoint even though they touch.
-        targets = [(1, 500), (501, 1000)]
+        targets: list[tuple[int, int | None]] = [(1, 500), (501, 1000)]
         assert validate_target_ranges(targets, 1000) == targets
 
     def test_out_of_bounds_past_end(self) -> None:
