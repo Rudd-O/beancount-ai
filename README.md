@@ -1,4 +1,4 @@
-# Beancount AI: AI-powered receipt ingestion for [Beancount](https://beancount.github.io/) ledgers
+# Beancount AI: AI-powered accounting assistance for [Beancount](https://beancount.github.io/) ledgers
 
 ## Overview
 
@@ -13,11 +13,12 @@
 
 This lets you have a comprehensive AI-assisted workflow where:
 
-* you continue to use your your favorite importers to import data like bank statements;
-* you can quickly add any receipts you scanned to the newly-imported data;
-* you can use those added receipts to enhance the imported transactions with lots of detail;
-* you can ingest any receipts corresponding to transactions not imported (e.g. cash);
-* all of this happens with very little intervention on your part — at best, you'll fix an LLM-made error here and there.
+* use your your favorite importers to import data like bank statements;
+* use `bean-ai associate` to add receipts you scanned to the newly-imported data, and organize them;
+* enhance the imported and now-documented transactions with lots of detail using `bean-ai refine`;
+* ingest any receipts corresponding to transactions not imported (e.g. cash) with `bean-ai ingest`.
+
+All of the above happens with very little intervention on your part — at best, you'll fix an LLM-made error here and there; in most cases all you need to do is confirm the changes that the AI offers.
 
 This program imposes no dependency on cloud at all.  Furthermore, you do not need a harness like Codex or OpenClaw; you don't need MCP or any similar complication to use `bean-ai` either; the LLM is never given free / open access to your accounting data — it only ever sees the information that the current task requires, and it isn't allowed to touch anything else.  You *don't* need a frontier model for this — modest 30B parameter models do very well!
 
