@@ -129,6 +129,8 @@ Imported receipts are saved under `<beancount_folder>/<account_with_slashes>/` w
 
 For example, `2026-07-15_Groceries — IMG_1234.jpg`.
 
+Timestamps of the receipts are preserved.  The Beancount folder is the folder containing the main Beancount file you configured.
+
 ### LLMs tested and known to do great work
 
 * qwen3.6-27b through Ollama / Open-WebUI: excellent results
