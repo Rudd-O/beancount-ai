@@ -28,10 +28,11 @@ from beancount_ai.client.display import print_diff
 from beancount_ai.client.server import (
     RemoteVM,
     demarkdownify,
-    load_json,
     preview_receipt,
+    save_receipt,
     stream_reasoning_and_capture_output,
 )
+from beancount_ai.structs import load_json
 
 
 def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
@@ -315,8 +316,8 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
             raise Exception(f"Refusing to associate: {e}") from e
 
         # Download the receipt and save it organized.
-        raw_bytes = vm.fetch_receipt(receipt)
-        receipt_path.write_bytes(raw_bytes)
+        fetched = vm.fetch_receipt(receipt)
+        save_receipt(receipt_path, fetched)
 
         print(f"Receipt saved to {receipt_path}", file=sys.stderr)
 

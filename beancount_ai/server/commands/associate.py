@@ -55,7 +55,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     )
 
     try:
-        raw = storage.read(receipt_path)
+        raw = storage.read(receipt_path).data
     except Exception as e:
         print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)

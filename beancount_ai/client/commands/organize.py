@@ -7,6 +7,7 @@ from beancount_ai.client.beanfiles import predict_receipt_destination_path
 from beancount_ai.client.config import Configuration
 from beancount_ai.client.server import (
     RemoteVM,
+    save_receipt,
 )
 
 
@@ -28,8 +29,8 @@ def organize_receipt(
     receipt_path = predict_receipt_destination_path(
         beancount_folder, transaction_date, filename, account, description
     )
-    raw = vm.fetch_receipt(filename)
-    receipt_path.write_bytes(raw)
+    fetched = vm.fetch_receipt(filename)
+    save_receipt(receipt_path, fetched)
     return receipt_path
 
 

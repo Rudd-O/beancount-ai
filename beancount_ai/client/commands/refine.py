@@ -22,11 +22,10 @@ from beancount_ai.client.display import print_diff
 from beancount_ai.client.server import (
     RemoteVM,
     demarkdownify,
-    load_json,
     open_document,
     stream_reasoning_and_capture_output,
 )
-from beancount_ai.structs import RefineRequest, RefineRequestDocument
+from beancount_ai.structs import RefineRequest, RefineRequestDocument, load_json
 
 _TX_HEADER_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2} [*!D]\s")
 _TARGET_REGEX = re.compile(r"^([1-9][0-9]*)(?:-(end|[1-9][0-9]*))?$")

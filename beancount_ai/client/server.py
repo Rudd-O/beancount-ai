@@ -3,23 +3,12 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import IO, Any, Literal, cast
+from typing import IO, Literal, cast
 
 from colorama import Fore, Style  # type: ignore
 
 from beancount_ai.client.config import Configuration
-
-
-class BadJSON(json.decoder.JSONDecodeError):
-    def __str__(self) -> str:
-        return json.decoder.JSONDecodeError.__str__(self) + "\nText:\n" + (self.doc)
-
-
-def load_json(s: str | bytes) -> Any:
-    try:
-        return json.loads(s)
-    except json.decoder.JSONDecodeError as e:
-        raise BadJSON(e.msg, s if isinstance(s, str) else s.decode("utf-8"), e.pos)
+from beancount_ai.structs import FetchedReceipt, load_json
 
 
 def stream_reasoning_and_capture_output(stdout: IO[bytes]) -> str:
@@ -196,16 +185,16 @@ class RemoteVM:
 
         return transaction, payment_account
 
-    def fetch_receipt(self, filename: str) -> bytes:
+    def fetch_receipt(self, filename: str) -> FetchedReceipt:
         cmd, proc, stdin, stdout = self._call("beanai.Fetch", arg=filename)
         stdin.close()
 
-        raw = stdout.read()
-        ret = proc.wait()
-        if ret != 0:
-            raise subprocess.CalledProcessError(ret, cmd)
-
-        return raw
+        try:
+            return FetchedReceipt.load(stdout)
+        finally:
+            ret = proc.wait()
+            if ret != 0:
+                raise subprocess.CalledProcessError(ret, cmd)
 
     def remove_receipt(self, filename: str) -> None:
         cmd, proc, stdin, _ = self._call("beanai.Remove", arg=filename)
@@ -214,6 +203,15 @@ class RemoteVM:
         ret = proc.wait()
         if ret != 0:
             raise subprocess.CalledProcessError(ret, cmd)
+
+
+def save_receipt(path: Path, fetched: FetchedReceipt) -> None:
+    """Write *fetched* to *path*, preserving the server-side modification time."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(fetched.data)
+    # os.utime with a (atime, mtime) tuple sets both; here we want the file to
+    # appear as if it was last modified at the timestamp the server reported.
+    os.utime(path, (fetched.timestamp, fetched.timestamp))
 
 
 def open_document(dest_path: Path) -> None:
@@ -228,5 +226,5 @@ def open_document(dest_path: Path) -> None:
 
 def preview_receipt(cfg: Configuration, filename: str, preview_dir: Path) -> None:
     dest_path = preview_dir / filename
-    dest_path.write_bytes(RemoteVM.from_cfg(cfg).fetch_receipt(filename))
+    save_receipt(dest_path, RemoteVM.from_cfg(cfg).fetch_receipt(filename))
     open_document(dest_path)

@@ -15,6 +15,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
 from beancount_ai.client.commands.importcmd import ImportResult
 from beancount_ai.client.config import BeancountConfiguration
+from beancount_ai.structs import FetchedReceipt
 
 # ===========================================================================
 # Sample data used by the majority of tests.
@@ -68,6 +69,8 @@ def bc(tmp_path: pathlib.Path) -> BeancountConfiguration:
 def _make_vm(
     receipt_content: bytes = SAMPLE_RECEIPT_DATA,
     tx: str | None = None,
+    *,
+    timestamp: float = 1700000000.5,
 ) -> mock.MagicMock:
     """Return a mocked ``RemoteVM``.
 
@@ -75,7 +78,7 @@ def _make_vm(
     tests get a clean transaction and do not need to re-implement comment-stripping.
     """
     vm = mock.MagicMock()
-    vm.fetch_receipt.return_value = receipt_content
+    vm.fetch_receipt.return_value = FetchedReceipt(receipt_content, timestamp)
     if tx is None:
         tx = SAMPLE_TX_TEXT
     vm.process_receipt.return_value = (tx, "Expenses:Food")
@@ -171,7 +174,8 @@ class TestInitAttributes:
             _make_vm(receipt_content=b"CUSTOM"), bc, "test.pdf"
         )
 
-        assert result.receipt_data == b"CUSTOM"
+        assert result.fetched_receipt.data == b"CUSTOM"
+        assert result.fetched_receipt.timestamp == 1700000000.5
         assert isinstance(result.transaction_text, str)
         assert len(result.transaction_text) > 0
         assert isinstance(result.receipt_destination_path, pathlib.Path)
@@ -284,7 +288,9 @@ class TestCommit:
 
 class TestCommitRefusesModifiedIngestionFile:
     def test_commit_exits_if_ingestion_file_edited_after_read(
-        self, tmp_path: pathlib.Path, bc: BeancountConfiguration,
+        self,
+        tmp_path: pathlib.Path,
+        bc: BeancountConfiguration,
         capsys: "pytest.CaptureFixture[str]",
     ) -> None:
         """If the ingestion file changes after diff() read it, commit must abort.
@@ -294,7 +300,7 @@ class TestCommitRefusesModifiedIngestionFile:
         corrupt the ledger.
         """
         ingest = tmp_path / "imported.bean"
-        ingest.write_text("2025-01-01 * \"Seed\"\n", encoding="utf-8")
+        ingest.write_text('2025-01-01 * "Seed"\n', encoding="utf-8")
 
         result = ImportResult(_make_vm(), bc, "test.pdf")
         # Read the current content, as run() does before prompting.
@@ -302,7 +308,7 @@ class TestCommitRefusesModifiedIngestionFile:
 
         # Simulate the user editing the ledger while bean-ai processed the receipt.
         ingest.write_text(
-            "2025-01-01 * \"Seed\"\n2026-09-01 * \"User\" \"Edit\"\n",
+            '2025-01-01 * "Seed"\n2026-09-01 * "User" "Edit"\n',
             encoding="utf-8",
         )
 

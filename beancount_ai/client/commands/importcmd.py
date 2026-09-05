@@ -15,11 +15,13 @@ from beancount_ai.client.config import BeancountConfiguration, Configuration
 from beancount_ai.client.display import print_diff
 from beancount_ai.client.server import (
     RemoteVM,
+    save_receipt,
 )
+from beancount_ai.structs import FetchedReceipt
 
 
 class ImportResult:
-    receipt_data: bytes
+    fetched_receipt: FetchedReceipt
     transaction_text: str
     receipt_destination_path: Path
     ingestion_destination_path: Path
@@ -45,7 +47,7 @@ class ImportResult:
         dest = beancount.ingestion_destination_path
         self._ingestion_guard = FileGuard.take(dest)
 
-        receipt_data = vm.fetch_receipt(filename)
+        self.fetched_receipt = vm.fetch_receipt(filename)
 
         beancount_transaction, account = vm.process_receipt(
             filename, beancount.account_list_file.read_text().splitlines()
@@ -77,7 +79,6 @@ class ImportResult:
             beancount_transaction, str(receipt_path)
         )
 
-        self.receipt_data = receipt_data
         self.transaction_text = formatted_tx
         self.receipt_destination_path = receipt_path
         self.ingestion_destination_path = beancount.ingestion_destination_path
@@ -127,8 +128,7 @@ class ImportResult:
             sys.exit(1)
 
         try:
-            # Write the receipt data.
-            receipt_path.write_bytes(self.receipt_data)
+            save_receipt(self.receipt_destination_path, self.fetched_receipt)
             print(
                 f"The receipt has been filed under {receipt_path}",
                 file=sys.stderr,

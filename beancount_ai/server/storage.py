@@ -11,7 +11,7 @@ from beancount_ai.server.config import (
     LocalFileDocumentSourcesConfiguration,
     WebDAVDocumentSourcesConfiguration,
 )
-from beancount_ai.structs import ItemListing
+from beancount_ai.structs import FetchedReceipt, ItemListing
 
 if TYPE_CHECKING:
     from beancount_ai.server.config import Configuration
@@ -39,8 +39,9 @@ class ReceiptBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def read(self, filename: str) -> bytes:
-        """Return the raw bytes of *filename*, or raise ResourceNotFoundError."""
+    def read(self, filename: str) -> FetchedReceipt:
+        """Return the raw bytes and modification time of *filename*, or raise
+        ResourceNotFoundError."""
         raise NotImplementedError
 
     @abstractmethod
@@ -77,10 +78,14 @@ class WebDAVClient(ReceiptBackend):
     def list(self) -> list[ItemListing]:
         return cast(list[ItemListing], self.client.ls("/", detail=True))
 
-    def read(self, filename: str) -> bytes:
+    def read(self, filename: str) -> FetchedReceipt:
         try:
             with self.client.open(filename, "rb") as remote_file:
-                return cast(bytes, remote_file.read())
+                raw = cast(bytes, remote_file.read())
+            modified = self.client.modified(filename)
+            if modified is None:
+                raise Exception(f"no modification time reported for {filename}")
+            return FetchedReceipt(raw, modified.timestamp())
         except WebDAVResourceNotFound as e:
             raise ResourceNotFoundError(os.path.basename(filename)) from e
 
@@ -121,11 +126,12 @@ class LocalFileBackend(ReceiptBackend):
     def _path(self, filename: str) -> Path:
         return self.folder / os.path.basename(filename)
 
-    def read(self, filename: str) -> bytes:
+    def read(self, filename: str) -> FetchedReceipt:
         path = self._path(filename)
         if not path.is_file():
             raise ResourceNotFoundError(os.path.basename(filename))
-        return path.read_bytes()
+        st = path.stat()
+        return FetchedReceipt(path.read_bytes(), st.st_mtime)
 
     def remove(self, filename: str) -> None:
         path = self._path(filename)

@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 
 from beancount_ai.client.config import Configuration
-from beancount_ai.client.server import RemoteVM
+from beancount_ai.client.server import RemoteVM, save_receipt
 
 
 def run(cfg: Configuration, args: argparse.Namespace) -> None:
@@ -12,7 +12,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
     gotten = RemoteVM.from_cfg(cfg).fetch_receipt(args.filename)
-    Path(args.destination).write_bytes(gotten)
+    save_receipt(Path(args.destination), gotten)
 
 
 def subcommand_parser(

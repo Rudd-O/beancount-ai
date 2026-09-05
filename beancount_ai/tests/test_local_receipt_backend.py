@@ -27,6 +27,7 @@ from beancount_ai.server.config import (
     WebDAVDocumentSourcesConfiguration,
 )
 from beancount_ai.server.storage import LocalFileBackend, ResourceNotFoundError
+from beancount_ai.structs import FetchedReceipt
 
 # ===========================================================================
 # Helpers
@@ -132,8 +133,17 @@ class TestRead:
         cfg = _local_config(tmp_path)
         _seed(cfg.receipts_uningested_folder(), "r.png", b"pixels")
         backend = LocalFileBackend(cfg, "uningested")
-        assert backend.read("r.png") == b"pixels"
-        assert backend.read("/r.png") == b"pixels"
+        assert backend.read("r.png").data == b"pixels"
+        assert backend.read("/r.png").data == b"pixels"
+
+    def test_read_returns_server_timestamp(self, tmp_path: Path) -> None:
+        cfg = _local_config(tmp_path)
+        p = _seed(cfg.receipts_uningested_folder(), "r.png", b"pixels")
+        known = 1700000000.5
+        os.utime(p, (known, known))
+        fetched = LocalFileBackend(cfg, "uningested").read("r.png")
+        assert isinstance(fetched, FetchedReceipt)
+        assert fetched.timestamp == known
 
     def test_missing_file_raises(self, tmp_path: Path) -> None:
         cfg = _local_config(tmp_path)
@@ -336,10 +346,10 @@ class TestBackendIntegration:
 
         assert [i["name"] for i in uningested.list()] == ["a.jpg"]
         assert [i["name"] for i in unassociated.list()] == ["b.pdf"]
-        assert uningested.read("a.jpg") == b"A"
+        assert uningested.read("a.jpg").data == b"A"
         uningested.remove("a.jpg")
         assert [i["name"] for i in uningested.list()] == []
-        assert unassociated.read("b.pdf") == b"B"
+        assert unassociated.read("b.pdf").data == b"B"
 
 
 class TestModifiedIsSortable:

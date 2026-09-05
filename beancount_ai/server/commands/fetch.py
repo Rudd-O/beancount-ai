@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 
@@ -17,10 +18,10 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     receipt_path = f"/{fn}"
 
     try:
-        raw = make_receipt_backend(cfg, "uningested").read(receipt_path)
+        fetched = make_receipt_backend(cfg, "uningested").read(receipt_path)
     except ResourceNotFoundError:
         try:
-            raw = make_receipt_backend(cfg, "unassociated").read(receipt_path)
+            fetched = make_receipt_backend(cfg, "unassociated").read(receipt_path)
         except Exception as e:
             print(f"error: cannot read {fn}: {e}", file=sys.stderr)
             sys.exit(1)
@@ -28,7 +29,12 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
         print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    sys.stdout.buffer.write(raw)
+    # The wire format is a single JSONL metadata line, then the raw bytes of
+    # the receipt.  The newline after the JSON line is the delimiter that the
+    # client partitions on.
+    meta = json.dumps({"timestamp": fetched.timestamp})
+    sys.stdout.buffer.write(meta.encode("utf-8") + b"\n")
+    sys.stdout.buffer.write(fetched.data)
     sys.stdout.buffer.flush()
 
 
