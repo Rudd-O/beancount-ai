@@ -55,7 +55,7 @@ Bug reports, feature requests and pull requests are welcome!
 
 ## Quick Start
 
-**Dependencies**: You will need `xdg-open` from the `xdg-utils` package, and your machine will need access to an LLM via Open-WebUI.
+**Dependencies**: You will need `xdg-open` from the `xdg-utils` package installed.
 
 **Install**: `pip install .` from this repository is the easiest way.  Alternatives include installing in a virtual environment, or [using pre-built Fedora RPMs](https://repo.rudd-o.com/) which deal with the availability of all required dependencies (e.g. `python3-beancount`).  The source contains everything you need to build RPM packages including `rpm` and `deps-fedora` targets.
 
