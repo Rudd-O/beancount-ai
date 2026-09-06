@@ -1,6 +1,7 @@
 # See https://docs.fedoraproject.org/en-US/packaging-guidelines/Python/#_example_spec_file
 
 %define debug_package %{nil}
+%undefine _py3_shebang_s
 
 %define package_name beancount-ai
 %define module_name beancount_ai
