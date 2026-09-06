@@ -172,7 +172,7 @@ Here is a sample configuration file using the local backend:
     "ingestion_destination_file": "imported.beancount"
   },
   "ai": {
-    "api_url": "https://openwebui.example.com/v1",
+    "api_url": "http://openwebui.example.com/api",
     "token": "secret-token",
     "model_name": "qwen3.6:35b-a3b"
   },
@@ -207,6 +207,36 @@ Nextcloud user setup — looks like this:
   }
 }
 ```
+
+#### The `ai` section: OpenAI vs. a self-hosted backend
+
+If you pay OpenAI for your LLM, the `ai` section needs no URL at all — omit
+`api_url`, and `bean-ai` talks to the OpenAI API directly:
+
+```json
+"ai": {
+  "token": "sk-...",
+  "model_name": "gpt-4o"
+}
+```
+
+(`model_name` should be a vision-capable model from the [OpenAI model catalog](https://platform.openai.com/docs/models).)
+
+If you run your own OpenAI-compatible backend instead (Open-WebUI, Ollama,
+vLLM, ...), you must set `api_url` to its **base** URL — the prefix the client
+appends `chat/completions` to, which in Ollama and Open-WebUI includes an `/api`
+path:
+
+```json
+"ai": {
+  "api_url": "http://webui.home/api",
+  "token": "secret-token",
+  "model_name": "qwen3.6:35b-a3b"
+}
+```
+
+A trailing slash is allowed but not required, and do not add `/v1` yourself
+for Open-WebUI.
 
 ### Marking accounts in your ledger
 
@@ -247,7 +277,7 @@ Accounts with no markers are absent by default (opt-in, not opt-out). If *no* ac
 |---|---|---|
 | `beancount.main_file` | `Path` | Path to your main Beancount ledger file. Used to read existing transactions and directives which influence `bean-ai`'s conduct. |
 | `beancount.ingestion_destination_file` | `Path \| null` | File to append ingested transactions to (relative to `main_file`). Defaults to `main_file` itself. |
-| `ai.api_url` | `str` | Base URL of the OpenAI compatible instance (example for an Open-WebUI instance running on a bare IP: `http://10.240.6.7/api/`). |
+| `ai.api_url` | `str` | *(optional)* Base URL of your OpenAI-compatible API; the client appends `chat/completions` to it. Omit to use the OpenAI API itself. Open-WebUI examples: `http://webui.home/api`, or `http://10.240.6.7/api` for a bare IP. Ollama: `http://localhost:11434/v1`. |
 | `ai.token` | `str` | API token for authenticating with the AI API. |
 | `ai.model_name` | `str` | Model name to use with the AI API. Must support vision. |
 | `documents.backend` | `str` | Receipt storage backend: `"local"` or `"webdav"`. Optional; when absent, the local ``..._receipts_folder`` fields select `local`, otherwise `webdav`. |

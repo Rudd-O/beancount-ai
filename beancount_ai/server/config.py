@@ -101,11 +101,12 @@ class AIConfiguration:
 
     Attributes:
         api_url: Base URL of the LLM API instance for receipt processing.
+            When absent, the OpenAI API itself is used.
         token: API token for authenticating with the LLM API instance.
         model_name: Model name to use via the LLM API instance.
     """
 
-    api_url: str
+    api_url: str | None
     token: str
     model_name: str
 
@@ -165,7 +166,7 @@ class Configuration:
             data = json.load(fh)
         instance = cls.__new__(cls)
         instance.ai = AIConfiguration()
-        instance.ai.api_url = data["ai"]["api_url"]
+        instance.ai.api_url = data["ai"].get("api_url")
         instance.ai.token = data["ai"]["token"]
         instance.ai.model_name = data["ai"]["model_name"]
         instance.documents = cls._load_documents(data["documents"])
