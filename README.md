@@ -1,12 +1,21 @@
 # Beancount AI: AI-powered accounting assistance for [Beancount](https://beancount.github.io/) ledgers
 
-## Overview
+`bean-ai` helps you manage your Beancount accounting data through AI —local or cloud, your choice.
 
-`bean-ai` helps you manage your Beancount accounting data through AI —local or cloud, your choice— in several ways:
+## Who is this for?  Is it for me?
+
+* Do you dread typing detailed transactions in your ledger by hand, but you'd like them entered in detail anyway?
+* Do you have receipts available for your transactions?
+* Is importing data into your ledger (e.g. using Beangulp) not saving you as much work as you'd expected?
+* Do you have a lot of catching up to do in your accounting?
+* Are you curious about AI, but scared of unleashing a full agent on your computer, or exposing your financial data to others?
+* Are you limited on how much time you can devote to your books?
+
+If you answered yes to any of these questions, then **yes, `bean-ai` is for you**.
 
 ### Ingest receipts directly into Beancount files
 
-It can import (scanned or photographed) receipts into a Beancount file and organize them coherently.
+`bean-ai` can import (scanned or photographed) receipts into a Beancount file, directly as transactions, and organize those receipts coherently.
 
 The LLM processes your receipt to extract transaction details and convert it into a Beancount transaction.  `bean-ai` uses that information to file the receipt under the appropriate account folder, and to write the newly-created transaction (complete with `document:` metadata tag linking back to the filed receipt).
 
