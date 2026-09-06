@@ -17,7 +17,7 @@ from beancount_ai.server.pdf import render_pdf_pages_to_png
 VALID_EXTENSIONS = frozenset((".jpg", ".jpeg", ".png", ".pdf"))
 
 
-def ssl_verify_path() -> str:
+def ssl_verify_path() -> ssl.SSLContext:
     """Resolve an SSL CA bundle path for use with ``httpx`` clients.
 
     Falls back to ``certifi.where()`` when no OpenSSL default is configured.
@@ -29,10 +29,14 @@ def ssl_verify_path() -> str:
     """
     ssl_paths = ssl.get_default_verify_paths()
     if ssl_paths.cafile:
-        return ssl_paths.cafile
+        return ssl.create_default_context(
+            cafile=ssl_paths.cafile, capath=ssl_paths.capath
+        )
+
     import certifi
 
-    return certifi.where()
+    ssl_paths2 = certifi.where()
+    return ssl.create_default_context(cafile=ssl_paths2)
 
 
 def file_to_image_parts(

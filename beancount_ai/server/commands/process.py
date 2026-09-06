@@ -70,12 +70,10 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
         print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    verify = ssl_verify_path()
-
     client = OpenWebUIClient(
         api_key=cfg.ai.token,
         base_url=cfg.ai.api_url,
-        http_client=HttpxClient(verify=verify),
+        http_client=HttpxClient(verify=ssl_verify_path()),
     )
 
     text_part: ChatCompletionContentPartTextParam = {
