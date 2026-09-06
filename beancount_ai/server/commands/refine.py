@@ -20,7 +20,7 @@ from beancount_ai.server.llm import (
     ssl_verify_path,
     stream_reasoning_and_output,
 )
-from beancount_ai.structs import RefineRequest
+from beancount_ai.structs import RefineRequest, check_account_refs
 
 TRANSACTION_REFINEMENT_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "TRANSACTION_REFINEMENT_PROMPT.md"
@@ -66,13 +66,18 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-    if (
-        "accounts" not in request_data
-        or not isinstance(request_data["accounts"], list)
-        or not all(isinstance(acc, str) for acc in request_data["accounts"])  # pyright: ignore[reportUnknownVariableType]
-    ):
+    if "accounts" not in request_data:
         print(
-            f"error: Invalid request: account list missing or invalid", file=sys.stderr
+            "error: Invalid request: account list missing or invalid: missing",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    try:
+        accounts = check_account_refs(request_data["accounts"])
+    except ValueError as reason:
+        print(
+            f"error: Invalid request: account list missing or invalid: {reason}",
+            file=sys.stderr,
         )
         sys.exit(1)
 
@@ -94,7 +99,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
         raw = base64.b64decode(doc["data"])
         image_parts.extend(file_to_image_parts(doc["filepath"], raw))
 
-    account_text = json.dumps(accounts)
+    account_text = json.dumps(accounts, indent=2)
     prompt_text = TRANSACTION_REFINEMENT_PROMPT_PATH.read_text()
     prompt_text = prompt_text.format(
         transaction_text=transaction_text, accounts=account_text

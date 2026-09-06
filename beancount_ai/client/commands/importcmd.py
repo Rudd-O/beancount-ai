@@ -2,16 +2,22 @@ import argparse
 import difflib
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
+from beancount_ai.client.beancount_loader import (  # type: ignore
+    account_refs_or_die,
+)
 from beancount_ai.client.beanfiles import (
     FileGuard,
     FileModifiedError,
     insert_document_metadata,
     predict_receipt_destination_path,
 )
-from beancount_ai.client.config import BeancountConfiguration, Configuration
+from beancount_ai.client.config import (
+    BeancountConfiguration,
+    Configuration,
+)
 from beancount_ai.client.display import print_diff
 from beancount_ai.client.server import (
     RemoteVM,
@@ -50,7 +56,7 @@ class ImportResult:
         self.fetched_receipt = vm.fetch_receipt(filename)
 
         beancount_transaction, account = vm.process_receipt(
-            filename, beancount.account_list_file.read_text().splitlines()
+            filename, account_refs_or_die(beancount.main_file, date.today())
         )
         # Strip headline comments and newlines from the transaction.
         while beancount_transaction.lstrip().startswith(";"):

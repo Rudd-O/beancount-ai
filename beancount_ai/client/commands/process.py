@@ -1,7 +1,11 @@
 import argparse
 import subprocess
 import sys
+from datetime import date
 
+from beancount_ai.client.beancount_loader import (  # type: ignore
+    account_refs_or_die,
+)
 from beancount_ai.client.config import Configuration
 from beancount_ai.client.server import (
     RemoteVM,
@@ -16,7 +20,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     """
     try:
         llm_output, account = RemoteVM.from_cfg(cfg).process_receipt(
-            args.filename, cfg.beancount.account_list_file.read_text().splitlines()
+            args.filename, account_refs_or_die(cfg.beancount.main_file, date.today())
         )
     except subprocess.CalledProcessError as e:
         sys.exit(e.returncode)

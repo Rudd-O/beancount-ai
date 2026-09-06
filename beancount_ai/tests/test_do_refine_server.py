@@ -9,7 +9,7 @@ import io
 import json
 import pathlib
 import sys
-from typing import cast
+from typing import Any, cast
 from unittest import mock
 
 import pytest
@@ -58,9 +58,9 @@ def test_unsupported_document_extension_skipped(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """An unsupported document is warned about (stderr) and skipped; processing continues."""
-    req = {
+    req: dict[str, Any] = {
         "transaction_text": '2026-01-01 * "X"\n',
-        "accounts": ["Expenses:Food"],
+        "accounts": [{"name": "Expenses:Food"}],
         "documents": [{"filepath": "doc.docx", "data": "aGVsbG8="}],
     }
     stdin_text = json.dumps(req)

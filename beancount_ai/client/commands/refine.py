@@ -5,9 +5,13 @@ import json
 import re
 import subprocess
 import sys
+from datetime import date, datetime
 from pathlib import Path
 from typing import cast
 
+from beancount_ai.client.beancount_loader import (  # type: ignore
+    account_refs_or_die,
+)
 from beancount_ai.client.beanfiles import (
     FileBlocks,
     FileGuard,
@@ -28,7 +32,22 @@ from beancount_ai.client.server import (
 from beancount_ai.structs import RefineRequest, RefineRequestDocument, load_json
 
 _TX_HEADER_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2} [*!D]\s")
+_TX_DATE_REGEX = re.compile(r"^(\d{4}-\d{2}-\d{2})\s+[*!D]")
 _TARGET_REGEX = re.compile(r"^([1-9][0-9]*)(?:-(end|[1-9][0-9]*))?$")
+
+
+def _tx_date(tx_block: list[str]) -> date:
+    """Return the Beancount date on the transaction block's first line.
+
+    The first line of a valid transaction block is its header (date + flag);
+    the date is what the account list must be derived "as of".
+    """
+    m = _TX_DATE_REGEX.match(tx_block[0])
+    if m is None:
+        raise ValueError(
+            f"could not read the transaction date from: {tx_block[0].strip()!r}"
+        )
+    return datetime.strptime(m.group(1), "%Y-%m-%d").date()
 
 
 def parse_target(token: str) -> tuple[int, int | None]:
@@ -232,13 +251,11 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
         except subprocess.CalledProcessError as e:
             raise Exception(f"Error refining receipt: {e}") from e
 
-        accounts = cfg.beancount.account_list_file.read_text(
-            encoding="utf-8"
-        ).splitlines()
-
         request_payload: RefineRequest = {
             "transaction_text": "".join(tx_block),
-            "accounts": accounts,
+            "accounts": account_refs_or_die(
+                cfg.beancount.main_file, _tx_date(tx_block)
+            ),
             "documents": documents_data,
         }
         stdin.write(json.dumps(request_payload).encode("utf-8"))

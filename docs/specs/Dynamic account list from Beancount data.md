@@ -1,282 +1,184 @@
 # Spec: Dynamic account list from Beancount data
 
-Status: proposed.
+Status: implemented. This spec documents the behavior that is shipped in the code; it describes *what the program does*, not how it is implemented.
 
 This is the specification for the Roadmap item **Prompt injectivity for accounts** (`docs/Roadmap.md`).
 
 ## Overview
 
-Today the account list offered to the LLM is read by the client from a **static file on disk** (`beancount.account_list_file`, customarily `~/.config/bean-ai.accounts`), which the user has to keep in sync with the ledger by hand (e.g. via `bean-query ... 'SELECT distinct account ORDER BY account;'`). Ingested accounts can drift out of sync, disappear from the file silently, or carry stale per-account hints.
+Today the account list offered to the LLM could be read by the client from a **static file on disk** (`beancount.account_list_file`, customarily `~/.config/bean-ai.accounts`), which the user had to keep in sync with the ledger by hand (e.g. via `bean-query ... 'SELECT distinct account ORDER BY account;'`). Ingested accounts could drift out of sync, be closed in the interim, disappear from the file silently, or carry stale per-account hints.
 
-This feature makes the client **derive the account list directly from the Beancount ledger** at run time:
+This feature makes the client **derive the account list directly from the Beancount ledger** at run time.  The feature centers around the use of metadata keys in 
 
-1. The list is computed from the parsed ledger (`beancount.loader`), so it can never drift from the data it is describing.
-2. Only accounts **open on the execution date**, or **closed after** it, are included — a closed account is never offered to the LLM to book new expenses against.
-3. Which accounts (and subtrees) are offered at all is decided by **opt-in metadata** on the account's `open` directive (`bean-ai-use: "recursive"`), not by the whole account tree.
-4. Per-account guidance that previously lived in `#`-suffixed comments in the static file becomes **typed, quoted string metadata** (`bean-ai-rules`), which removes the free-text parsing seam that the old format had.
-5. The wire format changes from a JSON array of strings (`["Assets:Cash:CHF", ...]`) to a JSON array of **typed objects** (`[{"name": "Assets:Cash:CHF", "rule": "..."}, ...]`), and the server treats it as **inert data**: it never re-parses comments, never strips content, and injects it verbatim. All trust is established client-side from the user's own ledger.
+1. The list is computed from the parsed ledger, so it can never drift from the data it is describing.
+2. The list is formulated **as of a specific date** — only accounts whose `open` directive equals or precedes that date, and that are not yet `close`d as of it, are considered.
+3. The list is further filtered down by metadata directives on the `open` directives of each account:
+   - `bean-ai-include: "yes"` selects that one account.
+   - `bean-ai-include: "recursively"` selects the account and all its live subaccounts.
+   - `bean-ai-exclude: "yes"` blocks that specific account from the list.
+   - `bean-ai-exclude: "recursively"` blocks the account and all its live subaccounts from the list.
+4. Per-account guidance that previously lived in `#`-suffixed comments in the static file becomes **typed, quoted string metadata** (`bean-ai-rules`), which removes the free-text parsing seam the old format had.
+5. The wire format changes from a JSON array of strings (`["Assets:Cash:CHF", ...]`) to a JSON array of **typed objects** (`[{"name": "Assets:Cash:CHF", "rule": "..."}, ...]`), and the server treats them as **inert data**: it validates that `name` (and, if present, `rule`) are strings with no newlines, never re-parses or strips content, and injects them verbatim otherwise. All trust is established client-side from the user's own ledger.
 6. The client sends the same list on the `beanai.Process` *and* `beanai.Refine` paths, so both LLM prompts see an identical account universe.
 
-This feature **removes** the `beancount.account_list_file` config key outright. That is a **breaking change** for existing installs: they must mark their accounts in the ledger (see Migration) — no static-file fallback, on purpose.
+This feature **removes** the `beancount.account_list_file` config key outright. That is a **breaking change** for existing installs: they must mark their accounts in the ledger (see Migration) — there is no static-file fallback, on purpose.
 
 ## Design decisions
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Source of the account list | Parsed `beancount.loader` ledger, read by the client | Never diverges from the data; reuses infrastructure already present in `client/beancount_loader.py` |
-| "Open at execution time" | An account qualifies if its `open` date ≤ run date and it has no `close`, or its most recent `close` date > run date | A closed account must never be offered for new postings; an account closed *after* today is still live today |
-| Opt-in mechanism | `bean-ai-use: "recursive"` metadata on the account's **`open` directive** | Opt-in (safe default: nothing is offered) rather than opt-out; a single flag on the root of a subtree covers children; only accounts that appear in *some* included subtree are emitted |
-| Per-account guidance | `bean-ai-rules` metadata (a string) on the `open` directive; **does not inherit** from ancestors | Keeps the prompt tight: each account gets only guidance written for it; avoids re-emitting the same text 50 times down a subtree |
-| Account types | Every account type is eligible (`Assets`, `Liabilities`, `Income`, `Expenses`, plus custom roots) | The prompt already asks for funding accounts as well as expense accounts; no reason to special-case |
-| Root account (`Expenses`, bare `Assets`) | Included, subject to the same opt-in and date rules | Users mark whatever subtree roots they want; nothing is hardcoded about tree shape |
-| Accounts never `open`ed (only ever referenced in postings) | **Not included**, not offered as a fallback | In Beancount, referencing an unopened account is a *validation error* (`Invalid reference to unknown account`), so such names can only exist in a broken ledger; including them would make the LLM propose postings that beancount itself rejects |
-| Unopened sub-accounts inside an included, *open*, recursive subtree (e.g. `Expenses:Food:Bakery` when `Expenses:Food` is open and used) | **Not included** | Same reason: an account that has no `open` directive cannot legally receive postings. If the user wants an account available to the LLM, they must `open` it. (The `bean-ai-use` flag has no meaning on an unopened account — there is no directive to carry metadata on.) |
-| Metadata on unopened accounts | Impossible in Beancount | Metadata is only attached to directives (`open`/`close`/transactions); there is no directive for an account that was never opened, so per the previous item there is nothing to annotate, and attempting to "fix" this would produce invalid Beancount |
-| Wire format | JSON array of `{"name": ..., "rule"?: ...}` objects (new `AccountRef` struct), replacing the array of strings | Gives a stable, self-describing home for account-level text; removes all comment-parsing from both ends; keeps the server free of any ledger-specific interpretation |
-| Prompt filling | Server fills the `{accounts}` placeholder with `json.dumps(account_refs, indent=2)`; prompts gain a short note explaining the field meanings | Identical mechanism today (`json.dumps`), now typed; the note lets the LLM use rules without further explanation |
-| `account_list_file` config key | **Removed** (breaking change; the key is ignored with a one-line stderr warning if still present in a config) | A hand-maintained static file is the very source of drift and of the untyped free-text seam this roadmap item exists to remove; keeping a fallback would keep that path alive forever. The migration from the static file to ledger metadata is a one-time edit (see Migration) |
-| Loading cost | Reuses `loader.load_file(main_file)`; the load is already performed by the associate flow, and the client holds the advisory lock on the main file for the whole run, so a single load is race-free | Negligible; one parse per command |
-
-An alternative for the opt-in mechanism — `bean-ai-use: "yes"` (self only) vs. `"recursive"` — was considered and **rejected**: "self only" is strictly less useful than opening the account and its children individually, and the extra enum value buys no safety. The single `"recursive"` value keeps the surface minimal.
+| Source of the account list | The parsed ledger's directives | Never drifts from the data it describes; no second source of truth. |
+| "Open at a time" | An account qualifies if its `open` date ≤ the run date, and it has no `close` or its latest `close` date > the run date | A closed account must never be offered for new postings; an account closed *after* the run date is still live on that date. |
+| Opt-in mechanism | `bean-ai-include` / `bean-ai-exclude` metadata on the account's **`open` directive**, with values `"yes"` (just this account) or `"recursively"` (this account and all its live descendants) | Opt-in (safe default: nothing is offered) rather than opt-out; a single `bean-ai-include: "recursively"` on a subtree root covers all children; a per-account `"yes"` lets the user pick individual accounts without opting into the whole family; `bean-ai-exclude` allows blocking specific accounts (or whole subtrees) back out, and an account's own `bean-ai-include` re-includes it even inside an excluded subtree. |
+| Per-account guidance | `bean-ai-rules` metadata (a string) on the `open` directive; **does not inherit** from ancestors | Keeps the prompt tight: each account gets only guidance written for it; avoids re-emitting the same text many times down a subtree. |
+| Account types | Every account type is eligible (`Assets`, `Liabilities`, `Income`, `Expenses`, plus custom roots) | The prompt already asks for funding accounts as well as expense accounts; no reason to special-case. |
+| Root account (`Expenses`, bare `Assets`) | Included, subject to the same opt-in and date rules | Users mark whatever subtree roots they want; nothing is hardcoded about tree shape. |
+| Accounts never `open`ed (only ever referenced in postings) | **Not included**, not offered as a fallback | In Beancount, referencing an unopened account is a *validation error*, so such names can only exist in a broken ledger; including them would make the LLM propose postings that beancount itself rejects. |
+| Unopened sub-accounts inside an included, *open*, recursive subtree (e.g. `Expenses:Food:Bakery` when `Expenses:Food` is open and used) | **Not included** | Same reason: an account that has no `open` directive cannot legally receive postings. If the user wants an account available to the LLM, they must `open` it. (A marker has no meaning on an unopened account — there is no directive to carry metadata on.) |
+| Metadata on unopened accounts | Impossible in Beancount | Metadata is only attached to directives (`open`/`close`/transactions); there is no directive for an account that was never opened, so there is nothing to annotate, and attempting to "fix" this would produce invalid Beancount. |
+| Wire format | JSON array of `{"name": ..., "rule"?: ...}` objects, replacing the array of strings | Gives a stable, self-describing home for account-level text; removes all comment-parsing from both ends; keeps the server free of any ledger-specific interpretation. |
+| Prompt filling | The server fills the `{accounts}` placeholder with the indented JSON of the object list; the prompts carry a short note explaining the field meanings | Same mechanism as before (JSON into the prompt), now typed; the note lets the LLM use rules without further explanation. |
+| `account_list_file` config key | **Removed.** If it is still present in a config, loading the configuration fails with an error directing the user to mark accounts in the ledger; the command does not run | A hand-maintained static file is the very source of drift and of the untyped free-text seam this roadmap item exists to remove; keeping a silent fallback would keep that path alive forever. The migration from the static file to ledger metadata is a one-time edit (see Migration). |
+| Loading cost | The client parses the ledger with the standard Beancount parser; the load happens once per command, under the main-file lock | Negligible; one parse per command, race-free because the client already holds the exclusive advisory lock on the main file for the whole run. |
 
 ## Marking accounts in the ledger
 
 ### Metadata keys
 
-Both keys are attached to the **`open` directive** of the account, as ordinary metadata lines (four-space indent, quoted string value), which Beancount attaches to the `Open` entry's `meta` map:
+All three keys are attached to the **`open` directive** of an account, as ordinary metadata lines (four-space indent, quoted string value), which Beancount attaches to the `Open` entry's `meta` map:
 
-- `bean-ai-use` — **opt-in marker.** The only accepted value is `"recursive"`: the account *and all of its descendants that are themselves `open`ed and open (or closed-after-run) on the run date* are included in the account list. Any other value is a validation error (fail-stop, see Edge cases). Accounts with no `bean-ai-use` metadata are not included, *unless* an ancestor marked `"recursive"` includes them (in which case the child's own lack of the key is irrelevant — inclusion is inherited, the marker only needs to exist once, up the tree).
-- `bean-ai-rules` — **optional guidance string** for this account only. Shown to the LLM next to the account so it can be steered ("Use for supermarket groceries, including snacks and household consumables"). It does *not* inherit from ancestors. If absent, no guidance is sent for that account.
+- `bean-ai-include` — **opt-in marker.** The only accepted values are `"yes"` (select this account only) and `"recursively"` (select this account and all its live descendants). Any other value is a validation error (fail-stop, see Edge cases) naming the account and the offending value. An account with no `bean-ai-include` of its own is selected only if a proper ancestor carries `bean-ai-include: "recursively"` (inclusion then inherits down the tree; the marker only needs to exist once, up the tree). Closing the ancestor does *not* stop its marker from reaching the live descendants — the policy survives the parent's closure (see Edge cases).
+- `bean-ai-exclude` — **opt-out marker.** An account selected by `bean-ai-include` is removed from the list if it carries a `bean-ai-exclude` (or a proper ancestor carries `bean-ai-exclude: "recursively"`, even a closed one). However, an account's **own** `bean-ai-include` always beats an exclusion — its own or an ancestor's — so you can re-include one specific account inside a subtree that is otherwise excluded.
+- `bean-ai-rules` — **optional guidance string** for this account only. Shown to the LLM next to the account so it can be steered ("Use for supermarket groceries, including snacks and household consumables"). It does *not* inherit from ancestors. If absent, empty, or whitespace-only, no guidance is sent for that account.
 
 Example:
 
 ```beancount
-open Expenses:Food
-  bean-ai-use: "recursive"
-open Expenses:Food:Groceries
+; Recursively opt the whole food family in.
+2025-01-01 open Expenses:Food
+  bean-ai-include: "recursively"
   bean-ai-rules: "Supermarket and grocery runs; includes snacks"
-open Expenses:Food:Restaurants
-  bean-ai-rules: "Eating out and delivery; not take-away from supermarkets"
-open Expenses:Home
-  bean-ai-use: "recursive"
-open Assets:Cash:CHF
+2025-01-01 open Expenses:Food:Restaurants
+  bean-ai-rules: "Eating out and delivery"
+
+; Opt a funding account in individually.
+2025-01-01 open Assets:Cash:CHF
+  bean-ai-include: "yes"
   bean-ai-rules: "Physical cash on hand, Swiss francs"
-open Assets:Banks:Main
-  bean-ai-use: "recursive"
-open Liabilities:Credits:Visa
-  bean-ai-rules: "Visa credit card, statement-cycled"
+
+; Opt a bank subtree in recursively, but carve a reconciliation scratch
+; account back out.
+2025-01-01 open Assets:Banks:Main
+  bean-ai-include: "recursively"
+2025-01-01 open Assets:Banks:Main:Statement
+  bean-ai-exclude: "recursively"
+
+; An unmarked account: never offered to the LLM.
+2025-01-01 open Liabilities:Other
 ```
 
-In this ledger, a run on a date after all opens and before any close includes: `Expenses:Food`, `Expenses:Food:Groceries`, `Expenses:Food:Restaurants`, `Expenses:Home`, `Assets:Cash:CHF`, `Assets:Banks:Main` (and anything else `open`ed under `Assets:Banks:Main`). `Excluded-by-default` accounts like `Liabilities:Other` are absent unless marked.
+In this ledger, a run on a date after all of these opens and before any close offers: `Expenses:Food`, `Expenses:Food:Restaurants`, `Assets:Cash:CHF`, and `Assets:Banks:Main` (plus any other live account beneath it). It does **not** offer `Assets:Banks:Main:Statement` (carved out), nor `Liabilities:Other` (unmarked).
 
 ### Rules derived from the Beancount model
 
-- A Beancount account receives postings **only if it has an `open` directive** (an unopened reference is a loader validation error). The account universe for the LLM is therefore *by construction* exactly the universe the ledger already accepts postings for.
-- An account may be `open`ed, `close`d, `open`ed again. Each `open`/`close` is a separate entry with its own `meta`. The **marker and rules that apply to an account are whatever its *most recent* `open` directive (with date ≤ run date) carries.**
-- **Date rules.** An account is *live as of* the run date if:
-  - it has an `open` with date ≤ run date, and
-  - either it has no `close`, or its latest `close` has date > run date (i.e. it is currently open, and will still be open "at the end of the day" of the run).
-  An account whose `open` is in the future is excluded — it does not yet exist.
-- `bean-ai-use` **does not inherit**: it must be present on the account's own most recent `open` directive (or on an ancestor's, which is what "recursive" means).
+- A Beancount account receives postings **only if it has an `open` directive** (an unopened reference is a loader validation error). The account universe for the LLM is therefore, *by construction*, exactly the universe the ledger already accepts postings for.
+- An account may be `open`ed, `close`d, `open`ed again. Each `open`/`close` is a separate entry with its own `meta`. The **markers and rules that apply to an account are whatever its most recent `open` directive (with date ≤ run date) carries.**
+- **Date rule.** An account is *live as of* the run date when, considering only its `open` and `close` events on or before the run date, the most recent such event is an `open`. (Equivalently: it has an `open` ≤ the run date, and it has no `close` ≤ the run date that post-dates its latest such `open`.) An account whose `open` is in the future, or that is `close`d on or before the run date, is excluded.
+- `bean-ai-include` and `bean-ai-exclude` **do not inherit** unless their value is `recursively`: the marker must be present on the account's own most recent `open`, or on a proper ancestor's (which is what `recursively` means). A *closed* ancestor **can** carry a `recursively` marker down to its live descendants — closing a parent does not revoke the policy for children that remain open (see Edge cases).
 - `bean-ai-rules` **never inherits**, regardless of markers.
 
-## Client-side: `load_live_accounts()`
+## Deriving the account list
 
-### Location and signature
+The derivation is a pure function of (the main file, the run date) and yields a **sorted** list of `{name, rule?}` objects. It is fail-stop: any condition that would produce a misleading offer raises an error instead of proceeding.
 
-A new helper in `beancount_ai/client/beancount_loader.py` (next to `load_transactions` and `load_transaction_contexts`, which it can share the ledger load with):
+**Live set.** An account is *live as of* the run date when, considering only `open`/`close` events at or before the run date, the most recent such event is an `open`. Its "selected" `open` is the latest `open` at or before the run date (if several share a date, the last one in file order wins).
 
-```python
-@dataclass(frozen=True)
-class AccountRef:
-    """One account offered to the LLM.
+**Selection.** An account is *selected* if:
 
-    Attributes:
-        name: The full account name (e.g. "Expenses:Food:Groceries").
-        rule: Optional per-account guidance text (None when the account's
-              most recent open directive carries no bean-ai-rules metadata).
-    """
-    name: str
-    rule: str | None
+- it carries its own `bean-ai-include` (any value), **or**
+- a *proper* ancestor carries `bean-ai-include: "recursively"` — the ancestor need not itself be live; a closed parent's `recursively` marker still selects its live descendants.
 
+**Exclusion.** An account is *excluded* if:
 
-def load_live_accounts(
-    main_file: str | Path,
-    as_of: date,
-) -> list[AccountRef]:
-    """Return the list of live accounts from the ledger, for the LLM prompt.
+- it carries its own `bean-ai-exclude` (any value), **or**
+- a *proper* ancestor carries `bean-ai-exclude: "recursively"` — likewise, a closed parent's `recursively` exclusion still reaches its live descendants.
 
-    An account is live if it is open (or was closed after ``as_of``) at
-    ``as_of``, and it is (transitively) under an ``open`` directive that
-    carries ``bean-ai-use: "recursive"``.  Accounts are returned sorted
-    by name.  Each account's ``rule`` is taken from its own most recent
-    ``open`` (≤ ``as_of``) carrying ``bean-ai-rules``; it does not inherit.
+**Final membership.** An account appears in the list only if it is live and selected and *(not excluded, or it carries its own `bean-ai-include`)*. In short: an account's own `bean-ai-include` wins over any exclusion; otherwise selection and exclusion are evaluated from the account and its proper ancestors, regardless of whether those ancestors are themselves live.
 
-    Raises on:
-      - a parse or validation error in the ledger (propagated);
-      - a ``bean-ai-use`` metadata value other than ``"recursive"``
-        (ValueError naming the account and the offending value);
-      - a non-string ``bean-ai-use`` / ``bean-ai-rules`` value (ValueError).
-    """
-```
+**Guidance.** Each listed account carries a `rule` when its selected `open` has a non-empty `bean-ai-rules`; the raw string is sent as-is, without inheritance.
 
-### Algorithm
+**Output.** The result is sorted by account name and sent as `{"name": ...}` / `{"name": ..., "rule": ...}` objects. An empty result is an error (see Edge cases: "no accounts selected").
 
-1. `entries, errors, options = loader.load_file(main_file)`. If `errors` is non-empty, propagate them as a raised error (the ledger must be healthy for us to trust its account graph; a ledger with validation errors can be run by beancount itself, but our account extraction is only defined for a consistent ledger).
-2. Walk `entries` collecting, per account name:
-   - its `open` entries (date, meta), sorted by date;
-   - its `close` entries (date), sorted by date.
-3. For each account, compute:
-   - `latest_open` — the `open` entry with the greatest date ≤ `as_of`; if none, the account is not live.
-   - `latest_close` — the `close` entry with the greatest date ≤ `as_of`; if any, and `latest_close > latest_open`, the account is closed at `as_of` → not live.
-   - `use_marker` — `latest_open.meta.get("bean-ai-use")` (validated, see below);
-   - `rules` — `latest_open.meta.get("bean-ai-rules")` (validated, see below).
-4. **Inclusion test**: an account is included iff it is live *and* there exists an ancestor (the account itself, its parent, its grandparent, … up to but excluding the root) that is live and carries `use_marker == "recursive"` on its own most recent `open` ≤ `as_of`. Note the ancestor must itself be *live* — an account that was already closed before `as_of` cannot "carry" the marker down, because the LLM would be offered live descendants of a dead account, which is incoherent.
-5. **Serialization**: return `list[AccountRef]` sorted by `name`.
+### "As of" — the run date
 
-### Metadata validation (fail-stop)
+The run date is the day the account list is formulated; comparison is by calendar date only (Beancount dates carry no time). Which date is used depends on the command:
 
-While walking `open`/`close` entries (step 3):
+- **`ingest` / `import` / `process`** create a *new* transaction, so the list is derived **as of today** — the same local clock that drives receipt naming, the associate date window, and so on.
+- **`refine`** edits an *existing* transaction, so the list is derived **as of that transaction's own date** (read from the date on the transaction's header line). This offers the LLM exactly the accounts that were open when the transaction was made. A targeted transaction whose header date cannot be read is an error.
 
-- If `bean-ai-use` is present and is not a `str`, or is a `str` other than `"recursive"` → raise `ValueError("invalid bean-ai-use value for <account>: <value!r> (only 'recursive' is accepted)")`. (We do not silently ignore a typo: it is more likely a misconfiguration than a harmless extra.)
-- If `bean-ai-rules` is present and is not a `str` (e.g. a number or boolean in the ledger — legal Beancount, wrong here) → raise `ValueError("bean-ai-rules for <account> is not a string: <value!r>")`.
-- Validation runs on **every** `open`/`close` entry, not just the selected most-recent one, so a typo anywhere in the file surfaces immediately.
+### Where the list is used
 
-### "Live at execution time" — date details
+The account list is needed wherever a transaction is produced with the LLM:
 
-- `as_of` is `date.today()` in the **client's local time zone** — the same clock that drives everything else in the client (receipt file naming, the associate date window, …). The run date is the day on which `bean-ai` was invoked, per the roadmap item.
-- Comparison is by `datetime.date` equality/ordering only (Beancount dates carry no time component).
-- "Most recent `open`" is the one with the maximum date among opens with `date ≤ as_of`. If there are multiple opens on the same date, the last in file order wins (beancount itself treats later-same-date directives as the effective ones).
+- `bean-ai process <file>` (`beanai.Process`) — as of today.
+- `bean-ai ingest` / `bean-ai import <filename>` (the import path behind both) — as of today.
+- `bean-ai refine <file> <targets>…` (`beanai.Refine`) — as of the refined transaction's own date.
 
-### Where it is called
-
-The account list is needed in exactly the three places that currently read `account_list_file`:
-
-- `client/commands/importcmd.py` — `ImportResult.__init__` (used by `bean-ai ingest` and `bean-ai import`)
-- `client/commands/process.py` — `run()` (`bean-ai process <file>`)
-- `client/commands/refine.py` — `do_refine_one()` (the per-transaction payload)
-
-All three replace `cfg.beancount.account_list_file.read_text().splitlines()` with a call through a new accessor on `BeancountConfiguration` (below), so no command code references the static file at all.
-
-Because `Configuration.load()` already acquires the exclusive advisory lock on `main_file` at startup, the ledger read here sees a stable file — no `FileGuard` re-snapshot is needed for the *read* (write-guarding is a separate roadmap item and out of scope).
-
-## Client-side: `BeancountConfiguration` accessor
-
-`beancount_ai/client/config.py`:
-
-```python
-class BeancountConfiguration:
-    ...
-    def accounts_for_prompt(self, run_date: date | None = None) -> list[AccountRef]:
-        """Return the account list to send to the LLM.
-
-        Queries the ledger via ``load_live_accounts(main_file,
-        run_date or date.today())``.  Raises the same errors as
-        ``load_live_accounts``, and raises ``RuntimeError("the LLM
-        would be offered no accounts")`` when the result is empty —
-        see Edge cases.
-        """
-```
-
-- `run_date` is `None` at every current call site (they all mean "today"); the parameter exists so tests can pin the date.
-
-The `account_list_file` attribute is **removed** from `BeancountConfiguration` entirely, along with its constructor argument. `Configuration.load()`:
-
-- no longer reads `data["beancount"]["account_list_file"]`;
-- **if the key is still present** in the config JSON, prints exactly one line to stderr — `warning: beancount.account_list_file is no longer used and will be ignored; mark your accounts with bean-ai-use in the ledger` — and continues (a hard failure here would be annoying: the config is not what this feature is about, and failing to *load* the config over a now-dead key would block every subcommand, including ones that never touch accounts).
-- The docstring is updated accordingly (see Configuration below).
-
-`AccountRef` is imported into `config.py` from `beancount_loader` (no new module: it is a data class about ledger data, and colocates with the function that produces it).
+The `associate` flow does **not** offer an account list to the LLM (its prompts use receipt info and candidate transactions), so it is unaffected.
 
 ## Wire protocol
 
-### New struct
+### Shape
 
-A TypedDict shared by client and server is added to `beancount_ai/structs.py`:
+The account list is a JSON array of objects. Each object has a required `name` (a non-empty string, no newlines) and an optional `rule` (a string, no newlines). No other keys are permitted on an element. Example:
 
-```python
-class AccountRef(TypedDict, total=False):
-    """One account offered to the LLM.
-
-    ``name`` is required; ``rule`` is optional and omitted when the
-    account carries no bean-ai-rules guidance.
-    """
-    name: str
-    rule: str
+```json
+[
+  {"name": "Assets:Cash:CHF", "rule": "Physical cash on hand, Swiss francs"},
+  {"name": "Expenses:Food:Restaurants", "rule": "Eating out and delivery"},
+  {"name": "Expenses:Food"}
+]
 ```
-
-(The client-side dataclass of the same shape in `beancount_loader.py` is the value object the client builds and serializes; the TypedDict is the declared shape of the JSON on the wire. Both stay in sync — a test asserts the JSON round-trip.)
 
 ### `beanai.Process`
 
-- **Request (stdin):** a JSON array of `{name, rule?}` objects — replacing today's JSON array of plain strings. Example:
-
-  ```json
-  [
-    {"name": "Assets:Cash:CHF", "rule": "Physical cash on hand, Swiss francs"},
-    {"name": "Expenses:Food:Groceries", "rule": "Supermarket and grocery runs; includes snacks"},
-    {"name": "Expenses:Food:Restaurants"}
-  ]
-  ```
-
-- **Server handler change** (`server/commands/process.py`, `_read_accounts_and_close_stdin`):
-  - Parse stdin as a JSON **array of objects**, each object an object with a required `name` string and an optional `rule` string. Any other shape (a string element, a missing/empty `name`, a non-string `name`, a non-string `rule`, a non-array top level) → stderr `error: invalid account list input: <why>` and `sys.exit(1)` (the existing fail-stop behavior is preserved, only the shape being validated changes).
-  - No `splitlines()`, no first-line taking, no comment stripping: the input is already one object per line, fully typed. Validation is by JSON type, not by text.
-  - Pass the validated list straight to the prompt filler.
-
-- The command's single positional argument (the hex-encoded filename) is unchanged.
+- **Request (stdin):** the account list above, as a JSON array — replacing today's JSON array of plain strings. The command's single positional argument (the hex-encoded filename) is unchanged.
+- **Server handler:** parses stdin as a JSON array of objects and validates the shape: the top level must be an array; each element must be an object; each element must carry a non-empty string `name` with no newlines and, optionally, a string `rule` with no newlines, and no other keys. Any other shape (a bare string element, a missing/empty/non-string `name`, a non-string `rule`, an unknown extra key, a non-array top level) is a fail-stop: `error: invalid account list input: <why>` on stderr and exit 1. There is no line splitting, no first-line taking, and no comment stripping — the input is fully typed and validated by JSON type, not by text.
 
 ### `beanai.Refine`
 
-- **Request (stdin):** `RefineRequest["accounts"]` changes type from `list[str]` to `list[AccountRef]` (shape: same JSON array as above). Everything else in `RefineRequest` (`transaction_text`, `documents`) is unchanged.
-- **Server handler change** (`server/commands/refine.py`): the type check for `request["accounts"]` changes from "a list of strings" to "a list of `AccountRef` objects" — same validation and fail-stop behavior as `beanai.Process`.
+- **Request (stdin):** the `accounts` field of the plain-JSON request payload changes type from a list of strings to the account list above. Everything else in the request (`transaction_text`, `documents`) is unchanged.
+- **Server handler:** the `accounts` field is validated exactly as in `beanai.Process`; a missing or invalid list is a fail-stop with a clear `error:` message and exit 1.
 
-### Serialization into the prompt (both prompts)
+### Serialization into the prompt
 
-- The server fills `{accounts}` with `json.dumps(account_refs, indent=2)` — the *same* call it makes today, just on a list of objects instead of strings.
-- A **new short paragraph** is prepended to the account listing in both prompts (`RECEIPT_CONVERSION_PROMPT.md` and `TRANSACTION_REFINEMENT_PROMPT.md`), directly above the `{accounts}` fence, explaining the fields:
+- The server fills the `{accounts}` placeholder in each prompt with the list rendered as indented JSON.
+- Both the receipt-conversion prompt and the transaction-refinement prompt carry a short, static note directly above the `{accounts}` fence, explaining the fields:
 
-  > Each account in the list is an object with a `name` (the account to use in the transaction) and, optionally, a `rule` (guidance from the user on when to use that account).  Prefer accounts whose `rule` best matches the item; when no `rule` applies, pick the account whose name is most specific.  Do not use any account not listed.
+  > Each account in the list is an object with a `name` (the account to use in the transaction) and, optionally, a `rule` (guidance from the user on when to use that account). Prefer accounts whose `rule` best matches the item; when no `rule` applies, pick the account whose name is most specific. Do not use any account not listed.
 
-- The existing `Do not imagine accounts not listed.` line remains, unchanged.
+- The existing `Do not imagine accounts not listed.` line remains unchanged.
 
-Because the two prompt files are **frozen by AGENTS.md** ("do not modify without verifying against docs/specs"), this spec *is* the verification: the modification is limited to (a) inserting this paragraph, and (b) nothing else. The placeholder name `{accounts}` and its surrounding fence are untouched. If the frozen-prompt policy requires a human re-test of the prompt before the change, that is a prerequisite to merge (see Prerequisites).
+The two prompts are **frozen by AGENTS.md** ("do not modify without verifying against docs/specs"). This spec *is* the verification: the change to each is limited to inserting that one explanatory paragraph and nothing else; the `{accounts}` placeholder and its surrounding fence are untouched.
 
 ### Client serialization
 
-The client builds `list[AccountRef]` (dicts, so they serialize directly):
+The client builds the sorted list of `{name, rule?}` objects and hands it to the transport: for `beanai.Process` it is written to the server's stdin; for `beanai.Refine` it becomes the `accounts` field of the request payload.
 
-```python
-def _to_ref_dict(ref: AccountRef) -> dict[str, str]:
-    d: dict[str, str] = {"name": ref.name}
-    if ref.rule is not None:
-        d["rule"] = ref.rule
-    return d
-```
+## Server-side behavior (summary)
 
-- For `beanai.Process`: `json.dumps([_to_ref_dict(r) for r in accounts])` written to stdin (replaces the current `json.dumps(account_list)` in `RemoteVM.process_receipt`).
-- For `beanai.Refine`: the `accounts` field of the `RefineRequest` payload is `[{"name": ..., "rule": ...?}, ...]` (replaces the current `list[str]`).
-
-The `RemoteVM.process_receipt` signature changes from `list[str]` to `list[AccountRef]` (the dict form is what crosses the wire; the dataclass is kept on the client side for typing the builder). Alternatively `process_receipt` accepts the already-dict list directly — the spec prefers **dicts on the wire boundary** (`list[dict[str, str]]`) to avoid a second TypedDict/dataclass conversion at the transport edge; the `AccountRef` dataclass lives in `beancount_loader` for the builder, and `RemoteVM.process_receipt` takes `list[dict[str, str]]`.
-
-## Server-side changes (summary)
-
-- `server/commands/process.py`:
-  - `_read_accounts_and_close_stdin` → `_read_account_refs_and_close_stdin`, validating the new shape (array of `{name, rule?}`).
-  - `run()`: `account_text = json.dumps(account_refs, indent=2)` (was the same call on a string list).
-- `server/commands/refine.py`:
-  - `run()`: the `accounts` type-check and the `json.dumps` gain the new shape/indent.
-- `server/RECEIPT_CONVERSION_PROMPT.md`, `server/TRANSACTION_REFINEMENT_PROMPT.md`: insert the field-explanation paragraph above `{accounts}`; nothing else changes.
-- **No server reads the ledger. No server ever parses a Beancount file.** The server's job stays: take typed account objects, inject them verbatim as JSON, call the LLM.
+- The server never reads the ledger and never parses a Beancount file.
+- It takes the typed account objects, validates their shape, and injects them verbatim as indented JSON into the prompt, then calls the LLM.
+- The only prompt edits are the field-explanation paragraph in the two affected prompts (see above).
 
 ## Prompt-side injection properties
 
 The roadmap item's core requirement is that the account payload reaching the LLM be **controlled and safe**. The properties the design guarantees:
 
-1. **Source is the user's own ledger.** The client is the only component that reads Beancount data, and the only component that composes the account list. The server never re-scans the ledger or re-interprets the text. There is no third-party text reaching the prompt through this path.
-2. **No free-text re-parsing server-side.** The old path had the client reading a text file line-by-line and the server re-splitting lines and taking the first line; any account line that contained a newline, a quote, or a leading semicolon could have reshaped the JSON. The new path has *no* textual parsing at all on either side of the wire: the client emits typed JSON, the server validates JSON types only.
-3. **Typed values.** `name` and `rule` are JSON strings. A non-string value is rejected before the LLM call. A `name` that is not a syntactically valid Beancount account (e.g. contains spaces) *cannot* happen: the name comes from parsed entries, which the beancount parser already validated. This matches the server's general role (do not interpret), and the prompt's own `Do not imagine accounts not listed` instruction is the user-facing safeguard.
-4. **Opt-in, not opt-out.** An untouched ledger with no `bean-ai-use` markers produces an *empty* list, which the client treats as an error (see Edge cases: "no live accounts"). There is no way for a misconfiguration to silently offer the entire tree.
+1. **Source is the user's own ledger.** The client is the only component that reads Beancount data and composes the account list. The server never re-scans the ledger or re-interprets the text. No third-party text reaches the prompt through this path.
+2. **No free-text re-parsing on either side of the wire.** The old path read a text file line-by-line and the server re-split lines and took the first line; any account line with a newline, a quote, or a leading semicolon could have reshaped the JSON. The new path has *no* textual parsing at all: the client emits typed JSON and the server validates JSON types only.
+3. **Typed values.** `name` and `rule` are JSON strings; a non-string value is rejected before the LLM call. A `name` that is not a syntactically valid Beancount account cannot occur: the name comes from parsed entries the Beancount parser already validated. The prompt's own `Do not imagine accounts not listed` instruction is the user-facing safeguard.
+4. **Opt-in, not opt-out.** An untouched ledger with no `bean-ai-include` / `bean-ai-exclude` markers produces an *empty* list, which the client treats as an error. There is no way for a misconfiguration to silently offer the entire tree.
 5. **Closed accounts are excluded by the date rule**, so the LLM cannot be pointed at an account that no longer accepts postings.
 
 ## Configuration
@@ -285,22 +187,23 @@ The roadmap item's core requirement is that the account payload reaching the LLM
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `beancount.main_file` | `Path` | Yes | Path to the main Beancount ledger. (as today) |
+| `beancount.main_file` | `Path` | Yes | Path to the main Beancount ledger (as today). |
 | `beancount.ingestion_destination_file` | `Path \| null` | No | As today. |
-| `beancount.account_list_file` | — | **Removed** | No longer read. If still present in a config, a one-line stderr warning is printed and the key is ignored (see `BeancountConfiguration` accessor above). Existing configs keep *loading*; the accounts it pointed to are no longer used. |
+| `beancount.account_list_file` | — | **Removed** | No longer read. If it is still present in a config, **loading the configuration fails** with an error directing the user to mark accounts in the ledger, and the command does not run. The key must be removed as part of migration (see Migration). |
 
-The README's `bean-ai.accounts` file description is **deleted** and replaced with the "Marking accounts in the ledger" guidance. The parameter table drops the row.
+The README's `bean-ai.accounts` file description is **deleted** and replaced with the "Marking accounts in the ledger" guidance; the parameter table drops the row.
 
-The server's config is **unaffected**: it takes the account list only via stdin, as before.
+The server's config is **unaffected**: it receives the account list only via stdin, as before.
 
 ## Migration (this is a breaking change)
 
 Existing installs have a static `bean-ai.accounts` file (customarily generated with `bean-query ... 'SELECT distinct account ORDER BY account;'` and annotated with `#`-prefixed comments). Migrating to the ledger:
 
-1. **Generate the marker skeleton.** The `bean-query` listing is the starting point for *which* accounts to mark, but it cannot be used as the source of the metadata: `SELECT distinct account` has no notion of which lines are `open` directives, and it will happily include closed accounts (an account's `close` directive does not remove it from `SELECT account` — the account name still appears in past transactions) and, in a healthy ledger, every unopened name is already a parser error anyway. So: take the distinct-account listing, and for each account you want the LLM to see, add/append to its `open` directive in the ledger:
+1. **Generate the marker skeleton.** The `bean-query` listing is the starting point for *which* accounts to mark, but it cannot be the source of the metadata: `SELECT distinct account` has no notion of which lines are `open` directives, and it will happily include closed accounts (an account's `close` does not remove it from `SELECT account`) — and in a healthy ledger every unopened name is already a parser error. So: take the distinct-account listing, and for each account you want the LLM to see, add/append to its `open` directive in the ledger:
 
    ```beancount
-   bean-ai-use: "recursive"
+   2025-01-01 open Assets:Some-account
+    bean-ai-include: "recursively"
    ```
 
    Placing the marker on a subtree root (e.g. `Expenses:Food`) is the usual edit — one line covers the whole family. Do **not** mark a root that already carries one for its children, and do **not** mark accounts you do not want the LLM to use (closed legacy accounts, bank-reconciliation roots like `Assets:Banks:*:Statement` if you keep those out of the prompt, …).
@@ -311,38 +214,17 @@ Existing installs have a static `bean-ai.accounts` file (customarily generated w
    ```
 
    Rules are per-account and do not inherit (see Design decisions).
-3. **Remove `beancount.account_list_file`** from `~/.config/bean-ai.json` and delete the `bean-ai.accounts` file. (Leaving the key in place only produces a stderr warning — the file is simply no longer read.)
-4. **Sanity-check** with `bean-ai process --dry-run` style verification is out of scope for this feature (Roadmap §7); the minimum check is to run any account-touching command and confirm exactly the right accounts appear in the prompt (the field-explanation paragraph plus the JSON listing make this easy to grep for in a logged LLM request).
+3. **Remove `beancount.account_list_file`** from `~/.config/bean-ai.json` and delete the `bean-ai.accounts` file. Unlike before, leaving the key in place now **aborts the command** (the config fails to load with a migration-oriented error), so it must be removed.
+4. **Sanity-check.** A `--dry-run`-style verification is out of scope for this feature (Roadmap §7); the minimum check is to run any account-touching command and confirm exactly the right accounts appear in the prompt (the field-explanation paragraph plus the JSON listing make this easy to grep for in a logged LLM request).
 
-The migration is a one-time ledger edit; it is expected to be slightly more typing than the old `bean-query` workflow (one `open` directive per marked subtree), but the result is version-controlled, per-account-typed, and can never drift.
+The migration is a one-time ledger edit; it is expected to take slightly more typing than the old `bean-query` workflow (one `open` directive per marked subtree), but the result is version-controlled, per-account-typed, and can never drift.
 
 ### Compatibility (what actually breaks)
 
-- **Configs:** loading no longer fails on the removed key; it warns. So existing config *files* load, but the accounts they referenced are no longer used — an un-migrated install will hit the "no live accounts" fail-stop on the first account-touching command, which is the intended nudge to migrate.
+- **Configs:** loading now *fails* on the removed key (it no longer merely warns). Existing config files therefore stop loading until the key is removed — an un-migrated install is nudged to migrate by the migration-oriented error rather than silently dropping the list.
 - **Wire format:** the server no longer accepts the old string-array shape (array of `{name, rule?}` objects only). Client and server ship in the same package and are updated together (see Rollout), so this is not a cross-version problem in supported deployments.
-- **Prompt files:** the two frozen prompts gain one explanatory paragraph each (see Prerequisites) — a behavior-neutral change.
-- **Tests:** every test that constructs `BeancountConfiguration(account_list_file=...)` or writes an `accounts.txt` is updated (see Testing plan). This is the bulk of the mechanical churn.
-
-## Client-side changes (file map)
-
-| File | Change |
-|---|---|
-| `beancount_ai/client/beancount_loader.py` | Add `AccountRef` (frozen dataclass) and `load_live_accounts(main_file, as_of)`; the existing `# type: ignore` module header is extended to cover the new imports; the two `loader.load_file` call sites inside `load_transactions`/`load_transaction_contexts` are left as-is (a load-cache reuse across functions is a perf nicety, not required) |
-| `beancount_ai/client/config.py` | Remove `account_list_file` from `BeancountConfiguration` (attribute + `__init__` parameter + docstring); new `accounts_for_prompt(run_date=None) -> list[AccountRef]`; `Configuration.load()` stops reading the `account_list_file` key and warns (once, to stderr) if it is still present in the JSON |
-| `beancount_ai/client/commands/importcmd.py` | Replace `beancount.account_list_file.read_text().splitlines()` with `beancount.accounts_for_prompt()`; pass the dict list to `vm.process_receipt` |
-| `beancount_ai/client/commands/process.py` | Same replacement |
-| `beancount_ai/client/commands/refine.py` | Same replacement; the `RefineRequest["accounts"]` value becomes the dict list |
-| `beancount_ai/client/server.py` | `RemoteVM.process_receipt(filename, account_refs: list[dict[str, str]])` — the type change is the only edit; the JSON write is unchanged |
-| `beancount_ai/structs.py` | Add `AccountRef` TypedDict; `RefineRequest["accounts"]` type annotation changes to `list[AccountRef]` |
-
-## Server-side changes (file map)
-
-| File | Change |
-|---|---|
-| `beancount_ai/server/commands/process.py` | `_read_accounts_and_close_stdin` → validate `list[{name, rule?}]`; `run()` uses `json.dumps(..., indent=2)` |
-| `beancount_ai/server/commands/refine.py` | `accounts` type-check updated to the new shape; `json.dumps(..., indent=2)` |
-| `beancount_ai/server/RECEIPT_CONVERSION_PROMPT.md` | Insert the field-explanation paragraph above the `{accounts}` fence (frozen-prompt exception — see Prerequisites) |
-| `beancount_ai/server/TRANSACTION_REFINEMENT_PROMPT.md` | Same paragraph |
+- **Prompts:** the two frozen prompts gain one explanatory paragraph each (see Wire protocol) — a behavior-neutral change.
+- **Ledger:** an un-migrated, unmarked ledger produces an empty account list, which every account-touching command rejects with the "no accounts selected" fail-stop (see Edge cases).
 
 ## Edge cases
 
@@ -350,95 +232,76 @@ The migration is a one-time ledger edit; it is expected to be slightly more typi
 
 | Scenario | Behavior |
 |---|---|
-| Ledger has parse or validation errors | `load_live_accounts` raises; the command prints the beancount error(s) to stderr and exits 1. (The ledger must be consistent for the account graph to be meaningful.) |
-| `bean-ai-use` value is not `"recursive"` (e.g. `"yes"`, `"all"`, a typo) | `ValueError` naming the account and the value; command exits 1. |
-| `bean-ai-use` or `bean-ai-rules` is not a string in the ledger | `ValueError` naming the account; command exits 1. |
-| No account carries `bean-ai-use: "recursive"` (the ledger is unmarked) | `accounts_for_prompt()` raises `RuntimeError`; the command prints `Error: no accounts marked bean-ai-use: "recursive" in <main_file>; the LLM would be offered no accounts to post to.  Mark the subtrees you want available (see docs), one 'open' line each.` and exits 1. This is fail-stop on purpose (an empty or near-empty list is almost always a misconfiguration — most commonly, an un-migrated install — and offering nothing to the LLM guarantees a garbage transaction). |
-| An included ancestor was `close`d before `as_of` | Its descendants are *not* pulled in by its marker (the marker is only carried by live ancestors). The account is simply not in the list; no error. |
-| An account is `open`ed after `as_of` (future-dated open) | Not live, not included. Its `bean-ai-use` is not consulted (its most-recent-open ≤ `as_of` doesn't exist). |
-| An account is `close`d after `as_of` (but opened before) | Live, included. (The user has closed it in the ledger for a future date; today it is still open.) |
-| An account is `open`ed, `close`d, `open`ed again — markers live on different opens | The most recent `open` ≤ `as_of` wins for both `bean-ai-use` and `bean-ai-rules`. A marker on the first open is ignored if the latest open does not carry it. |
-| An unopened account appears in postings but has no `open` directive | Not included (see Design decisions). No warning (the ledger itself is invalid and the parse-error case above already stops the run in that situation if beancount flags it; in edge cases where beancount tolerates it, the account simply does not appear). |
-| `account_list_file` is still present in the config | One stderr warning at config-load time, then the key is ignored. No further behavior change. |
-| Duplicate `open` on the same account and same date | The last in file order wins (beancount's own resolution), so the marker/rules of the later directive is what applies. |
-| An account name is a single component (e.g. just `Expenses`, a bare root) | Included on the same rules as any other name; the ancestor walk stops at the root component (the root has no parent, so it can only be included by its own marker). |
-| The same physical file is `main_file` *and* also `ingestion_destination_file` | No interaction with this feature; the ledger load sees the whole file including any pending ingestion, which is correct (an account that was just `open`ed in an unmerged ingestion is already real). |
+| Ledger has parse or validation errors | The derivation refuses to proceed: the command prints the Beancount error(s) and exits 1. (The account graph is only meaningful for a consistent ledger.) |
+| `bean-ai-include` / `bean-ai-exclude` value is not `"yes"` or `"recursively"` (or is not a string) | Validation error naming the account and the offending value; the command exits 1. |
+| `bean-ai-rules` is not a string in the ledger | Validation error naming the account; the command exits 1. |
+| No account is selected (the ledger is unmarked) | The command prints `Error: no accounts marked bean-ai-include: "yes" or "recursively" in <main_file>; the LLM would be offered no accounts to post to.  Mark the accounts or subtrees you want available (see docs) on their 'open' directives.` and exits 1. This is fail-stop on purpose — an empty or near-empty list is almost always a misconfiguration (most commonly an un-migrated install), and offering nothing to the LLM guarantees a garbage transaction. |
+| An included ancestor was `close`d on or before the run date | The ancestor itself is not in the list (it is not live), but a `recursively` marker on its selected `open` **still** pulls in its live descendants; the include/exclude policy survives the parent's closure. Closing an account revokes nothing from its still-open children. |
+| An account is `open`ed after the run date (future-dated) | Not live, not included; its `bean-ai-*` metadata is not consulted. |
+| An account is `close`d after the run date (but opened before) | Live, included. (The user closed it for a future date; on the run date it is still open.) |
+| An account is `open`ed, `close`d, `open`ed again — markers live on different opens | The most recent `open` at or before the run date wins for `bean-ai-include`, `bean-ai-exclude`, and `bean-ai-rules`; a marker only on an earlier open is ignored. |
+| An account carries both its own `bean-ai-include` and its own `bean-ai-exclude` | Included — the own `bean-ai-include` beats the exclusion. |
+| An unopened account appears only in postings, with no `open` directive | Not included (see Design decisions); no separate warning — the ledger itself is invalid and the parse-error case already stops the run where Beancount flags it. |
+| A `bean-ai-*` marker is placed on a `close` directive | Markers are read only from `open` directives; a `close`-side marker is ignored (silently — `close`-time metadata is idiosyncratic, and there is no safe interpretation). |
+| Duplicate `open` for the same account on the same date | The last in file order wins (Beancount's own resolution), so the later directive's markers/rules apply. |
+| An account name is a single component (e.g. bare `Expenses`) | Included on the same rules as any other name; the ancestor walk stops at the root (a root can only be selected by its own marker). |
+| The same physical file is `main_file` *and* `ingestion_destination_file` | No interaction: the ledger load sees the whole file including any pending ingestion, which is correct (an account just `open`ed in an unmerged ingestion is already real). |
 | Two concurrent `bean-ai` runs | The existing main-file lock serializes them; the ledger read happens under the lock, so both see the same account set. No new locking needed. |
+| A targeted transaction for `refine` has no parseable header date | An error is raised for that transaction (the account list must be derived as of its own date). |
 
 ### Server-side
 
 | Scenario | Behavior |
 |---|---|
-| Stdin is not a JSON array of objects | `error: invalid account list input: <reason>` on stderr, exit 1 (unchanged fail-stop; the shape check tightens) |
-| An element's `name` is a non-string or empty | Same as above |
-| An element's `rule` is present but a non-string | Same as above |
-| An element's `rule` is an empty string | Accepted (a user *can* attach an empty `bean-ai-rules` in the ledger; it is validated as a string on the client and passes through; the prompt filler skips empty-string rules at build time, so they never reach the wire) |
-| A `name` string that looks like it contains prompt-injection text (quotes, newlines, `Do not...`) | Sent through verbatim. It is inert data: the JSON encoding escapes it, the LLM sees it as an account name, and the prompt instructs it to use only the listed accounts by name. This is the accepted residual risk: the *user's own ledger* is the source, so a hostile ledger is a hostile user, which is out of threat model. Documented here so it is a conscious decision. |
-| The LLM outputs a transaction that uses an account not in the list | Existing client-side behavior is unchanged (the refine flow validates structure only; the process flow trusts the LLM). The prompt's `Do not imagine accounts not listed` line is the guard, as today. Out of scope for this feature. |
+| Stdin (or `accounts`) is not a JSON array of objects | `error: ... invalid account list ...` on stderr, exit 1 (fail-stop; the shape check is what tightens). |
+| An element's `name` is a non-string, empty, or contains a newline | Same as above. |
+| An element's `rule` is present but a non-string or contains a newline | Same as above. |
+| An element has any key other than `name` / `rule` | Same as above. |
+| An element's `rule` is an empty string | The client omits empty/whitespace-only `bean-ai-rules` at build time, so an empty `rule` never normally reaches the wire; if one did, the server accepts (it is a string). |
+| A `name` / `rule` containing prompt-injection text (quotes, newlines, `Do not…`) | Newlines are rejected; other characters are sent through verbatim. It is inert data: the JSON encoding escapes it, the LLM sees it as account text, and the prompt instructs it to use only the listed accounts by name. This is the accepted residual risk — the *user's own ledger* is the source, so a hostile ledger is a hostile user, which is outside the threat model. Documented as a conscious decision. |
+| The LLM outputs a transaction that uses an account not in the list | Unchanged from today: the process flow trusts the LLM and the refine flow validates structure only; the prompt's `Do not imagine accounts not listed` line is the guard. Out of scope for this feature. |
 
 ### Prompt-side
 
-- The `{accounts}` placeholder and its surrounding ```json fence render the `indent=2` JSON of the object array. A 100-account list at ~60 chars/line is ~1200 characters of prompt text — negligible against the prompt's existing length.
-- Multiple `rule` strings for the same account are impossible (one `rule` per account per `open`; only the latest open's `rule` is used).
-- The field-explanation paragraph is static English text in the prompt; it does not carry user data, so it cannot be an injection vector.
+- The `{accounts}` placeholder and its `json` fence render the indented JSON of the object array. A 100-account list at ~60 characters/line is ~1200 characters of prompt text — negligible against the prompt's existing length.
+- There is at most one `rule` per account (only the latest `open`'s `bean-ai-rules` is used); multiple rule strings for one account are impossible.
+- The field-explanation paragraph is static text and carries no user data, so it cannot be an injection vector.
 
-## Testing plan
+## Behavior verification
 
-Unit tests live under `beancount_ai/tests/`, in a new module `test_load_live_accounts.py`, following the style of `test_beancount_lock.py` (real `BeancountConfiguration` against a `tmp_path` ledger):
+The behavior above is covered by tests that pin a run date against a fixture ledger and drive the real commands. In summary, the scenarios that must hold:
 
-1. **Marker on the account itself** — an account with `bean-ai-use: "recursive"` on its own `open` (no other markers anywhere) → included with all its live descendants; unmarked siblings of the root are excluded.
-2. **Marker on an ancestor** — marker on `Expenses`, account `Expenses:Food:Groceries` (no marker) → included.
-3. **Marker on a live ancestor is required** — marker on `Expenses` which is `close`d before `as_of` → none of its live descendants are pulled in.
-4. **Date rules** — (a) `open` in the future → excluded; (b) `close` after `as_of` → included; (c) `close` before `as_of` → excluded; (d) reopen after close, `as_of` in the reopened span → included, with the *latest* open's marker/rules.
-5. **`bean-ai-rules` is per-account** — rule on `Expenses:Food`, none on `Expenses:Food:Groceries` → the parent's ref has the rule, the child's does not.
-6. **Invalid `bean-ai-use` values** — `"yes"`, `"all"`, a number, `"recursive "` (trailing space) → `ValueError` with account name in the message.
-7. **Non-string `bean-ai-rules`** — `42`, `true` → `ValueError`.
-8. **Empty ledger (no markers)** → `load_live_accounts` returns `[]`; the *command-level* fail-stop is tested separately.
-9. **Unopened accounts** — an account appearing only in postings is not in the result.
-10. **Sort order** — result is sorted by account name.
-11. **`accounts_for_prompt`** — returns `load_live_accounts(main_file, run_date)`; with `run_date=None` the date is pinned to `date.today()` (test with `freezegun`-free stubbing of `date` or by passing an explicit date); an empty result raises `RuntimeError` with the expected message.
-12. **Configuration** — `Configuration.load()` with a legacy config JSON still containing `beancount.account_list_file` → loads, prints exactly one stderr warning line containing `account_list_file is no longer used`, and does not fail; without the key → no warning.
-13. **JSON round-trip** — `json.dumps` of a ref with/without `rule` produces the exact `{"name": ...}` / `{"name": ..., "rule": ...}` shapes the server validator accepts.
-
-Server-side, in the existing style (`test_do_refine_server.py` uses a `_run(JSON-str)` helper):
-
-14. **`beanai.Process` validator** — accepts the new array-of-objects shape; rejects: bare string array, object with no `name`, object with a non-string `name`, object with a non-string `rule`, non-array top-level. Existing assertions on the reject-path's exit code (1) and stderr prefix (`error:`) are extended.
-15. **`beanai.Refine` validator** — same shapes, against `request["accounts"]`.
-16. **Prompt filler** — for a small fixture account list, the rendered prompt contains the `indent=2` JSON and the field-explanation paragraph, and no account text is lost or re-escaped beyond what `json.dumps` does.
-
-**Existing-test updates (mechanical churn, but required):** `test_beancount_lock.py`, `test_import_result.py`, and `test_do_refine.py` all construct `BeancountConfiguration(account_list_file=...)` and write an `accounts.txt` file. Since the attribute is removed, each is updated to: (a) construct `BeancountConfiguration` without it, (b) write a minimal ledger with the needed `open` directives + `bean-ai-use: "recursive"` markers in place of `accounts.txt`, and (c) assert on the *derived* account list where they previously asserted on the file's contents (e.g. `test_import_result.py`'s `test_passes_account_list` asserts `{"name": "Expenses:Food"} in ...` instead of `"Expenses:Food" in ...`). `test_do_refine_server.py`'s payload fixtures change from `["Expenses:Food"]` to `[{"name": "Expenses:Food"}]`. No test's scenario changes, only the fixture format.
-
-Doctests or a `--current-env` Ruff/MyPy pass via `make qa` must be green; `pytest -vv` on the new module plus the three updated ones is the fast loop.
-
-## Prerequisites
-
-- Both prompt files are frozen by `AGENTS.md`. This spec's modification to them is limited to **inserting one short explanatory paragraph** above the `{accounts}` fence in each. If the team's frozen-prompt policy requires a manual LLM test of the conversion flow with the modified prompt before merge, that test is a prerequisite to implementation. (The change is additive and does not alter any extraction or output instruction.)
+- **Marker on the account itself** — `bean-ai-include: "recursively"` on its own `open` (no other markers) includes the account plus all its live descendants; unmarked siblings of the root stay out.
+- **Marker on an ancestor** — `bean-ai-include: "recursively"` on `Expenses` includes an unmarked `Expenses:Food:Groceries`.
+- **Self-only include** — `bean-ai-include: "yes"` includes just that account and does *not* pull in its children.
+- **Closed ancestor still propagates** — a `bean-ai-include`/`bean-ai-exclude: "recursively"` on an ancestor that is `close`d before the run date still pulls in / blocks its *live* descendants; the closed ancestor itself is not in the list.
+- **Exclude** — `bean-ai-exclude: "yes"` blocks one selected account; `bean-ai-exclude: "recursively"` blocks a selected subtree.
+- **Carve-out** — an account inside an `bean-ai-exclude: "recursively"` subtree that carries its own `bean-ai-include` is re-included.
+- **Date rules** — (a) future-dated `open` → excluded; (b) `close` after the run date → included; (c) `close` before the run date → excluded; (d) open→close→reopen with the run date inside the reopened span → included, using the *latest* open's markers/rules.
+- **`bean-ai-rules` is per-account and not inherited** — a rule on a parent reaches no child; an empty/whitespace rule is omitted from the wire.
+- **Invalid values** — a `bean-ai-include`/`bean-ai-exclude` other than `"yes"`/`"recursively"` (including a non-string, and a trailing-space typo) and a non-string `bean-ai-rules` all raise a validation error naming the account and value.
+- **Unopened accounts** — an account appearing only in postings is not in the result.
+- **Sort order** — the result is sorted by account name.
+- **Empty ledger** — the derivation returns nothing and the command-level fail-stop fires with the documented error message.
+- **Run date per command** — process/import derive as of today; refine derives as of the targeted transaction's own header date.
+- **Wire round-trip** — the serialized `{name}` / `{name, rule}` objects are exactly what the server validator accepts, and the rendered prompt contains the indented JSON plus the field-explanation paragraph, with no account text lost or re-escaped beyond the JSON encoding.
+- **Server validation** — the server accepts the array-of-objects shape and rejects a bare string array, a missing/non-string/empty/ newline-bearing `name`, a non-string or newline-bearing `rule`, an unknown extra key, and a non-array top level.
+- **Legacy config key** — loading a config that still carries `beancount.account_list_file` fails with the migration-oriented error; a config without it loads normally.
 
 ## Rollout / compatibility ordering
 
-- The client and server ship in the same source package (same `pyproject.toml`, same RPM). They are updated **together** in one release. The wire-format change (strings → objects) is therefore not a cross-version problem in the supported deployment: a new client always talks to a new server, and in the same-VM configuration it spawns one; in the split-VM (qrexec) configuration, the operator updates both VMs with the same RPM.
-- The old string-array wire shape is **not** accepted by the new server. The breaking nature of this (both the wire format and the config key) is deliberate and accepted; the release notes must call out the ledger-marking migration, and if split-VM operators are found to lag in updating, the fix is to update both VMs, not to revive the old shape.
-- The release notes should point at the "Migration" section of this spec (and the corresponding README subsection) as the how-to.
+- The client and server ship in the same source package (same `pyproject.toml`, same RPM) and are updated **together** in one release. The wire-format change (strings → objects) is therefore not a cross-version problem in a supported deployment: a new client always talks to a new server, and in the same-VM configuration it spawns one; in the split-VM (qrexec) configuration the operator updates both VMs with the same RPM.
+- The old string-array wire shape is **not** accepted by the new server. The breaking nature of this (both the wire format and the config key) is deliberate and accepted; the release notes must call out the ledger-marking migration, and if split-VM operators lag in updating, the fix is to update both VMs, not to revive the old shape.
+- The release notes should point at the Migration section of this spec (and the corresponding README subsection) as the how-to.
 
 ## Out of scope
 
-- **Backup / atomic write of Beancount files before edit** (Roadmap §3) — a separate feature; this spec only *reads* the ledger.
-- **The interactive ambiguous-match picker in `associate`** (Roadmap §5) — no change; `associate` does not send an account list to the LLM (its two prompts use receipt info and candidates, not accounts).
-- **Retrying `RemoteVM` calls** (Roadmap §7) — no change.
-- **A `bean-ai accounts` CLI subcommand** (a read-only "show me what the LLM would see") — a natural follow-up once `load_live_accounts` exists; not part of this change.
-- **`bean-ai-use: "yes"` (self-only opt-in)** — rejected (see Design decisions).
+- **Backup / atomic write of Beancount files before edit** (Roadmap §3) — a separate feature; this feature only *reads* the ledger.
+- **The interactive ambiguous-match picker in `associate`** (Roadmap §5) — no change; `associate` does not send an account list to the LLM.
+- **Retrying transport calls** (Roadmap §7) — no change.
+- **A `bean-ai accounts` CLI subcommand** (a read-only "show me what the LLM would see") — a natural follow-up now that the derivation exists; not part of this change.
 - **Inheritance of `bean-ai-rules` from ancestors** — rejected (Design decisions).
-- **A per-account `max`/priority weight or a currency constraint on the LLM** — out of scope; a future extension of the `AccountRef` shape.
+- **A per-account `max`/priority weight or a currency constraint on the LLM** — out of scope; a future extension of the account-object shape.
 - **Any change to what the *receipt content itself* contributes to the prompt** (the image parts) — untouched.
-- **A one-shot migration *tool*** (`bean-ai migrate-accounts <old-file>` that rewrites the ledger) — the migration is expected to be done by hand per spec; an automatic tool is a natural follow-up but is not required (it would have to edit every `open` directive, which is a Beancount-file-write operation and belongs to the file-edit-safety work, Roadmap §3, first).
-- **A `--show-accounts` debug flag** on the account-touching commands (print the derived list to stderr, go on as normal) — nice, but the `bean-ai accounts` follow-up subcommand covers it; not part of this change.
-
-## Open questions (for revision)
-
-1. **Fail-stop on empty list** — the spec chooses to *error* when no account is marked, rather than fall back to the whole tree or to an empty list. An alternative is a one-time warning + proceed with an empty list (the LLM will then be forced to use no listed account, which is nonsense). Keep fail-stop? (The spec's answer is yes; the question is logged so it is a deliberate choice in review.)
-2. **Marker propagation through closed ancestors is rejected** — the spec requires the *marking* ancestor itself to be live at `as_of`. A looser rule ("any ancestor ever marked, even if closed now") is simpler to state and would let a user mark a long-closed `Expenses:Old` subtree whose *live* re-opened children they still want. The spec's answer is that this is almost certainly a misconfiguration (marked a closed subtree?) and should be surfaced, not silently honored.
-3. **`bean-ai-use` on a `close` directive** — Beancount allows metadata on `close`. The spec reads markers only from `open`. If a user puts a marker on the `close` of an account, it is ignored. Should it instead be a *validation error* (to catch the mistake), or silently ignored (spec's current choice: silently ignored, since `close`-time metadata is more idiosyncratically used)?
-4. **Migration aids** — the spec expects the user to do the `bean-ai.accounts`-to-ledger migration by hand (one-time). A one-shot helper command or a `--show-accounts` debug flag would be nice (both recorded as Out of scope). Would the team rather have the helper in this change despite the write-beancount-file coupling?
-5. **Multiple `rule` strings per account** — the spec sends one. If the user wants several rules, they concatenate them in the ledger into one string. A `list`-typed `bean-ai-rules` is a possible future extension of `AccountRef`; not in scope.
-
-(End of file)
+- **A one-shot migration *tool*** (that rewrites the ledger from an old static file) — the migration is done by hand per spec; an automatic tool is a natural follow-up but would have to edit every `open` directive, which is a Beancount-file-write operation and belongs to the file-edit-safety work (Roadmap §3) first.
+- **A `--show-accounts` debug flag** on the account-touching commands — the `bean-ai list-accounts` follow-up subcommand covers it; not part of this change.

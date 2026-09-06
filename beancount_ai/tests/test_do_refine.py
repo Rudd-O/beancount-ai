@@ -39,14 +39,19 @@ def _make_config(folder: pathlib.Path) -> Configuration:
         "; header comment above tx\n" + ORIGINAL_BLOCK + "\n"
         '2026-04-01 * "Other" "Unchanged"\n'
         "  Expenses:Other   1.00 CHF\n"
+        "  Assets:Cash:CHF  -1.00 CHF\n"
+        "\n"
+        "2020-01-01 open Expenses:Other\n"
+        "2020-01-01 open Expenses:Current:Food\n"
+        '  bean-ai-include: "recursively"\n'
+        "2020-01-01 open Assets:Cash:CHF\n"
+        '  bean-ai-include: "recursively"\n'
     )
-    (folder / "accounts.txt").write_text("Expenses:Current:Food\nAssets:Cash:CHF\n")
     (folder / "receipts").mkdir()
     (folder / "receipts" / "2026-03-15.coop.pdf").write_bytes(b"%PDF-1.4 fake")
 
     bc = BeancountConfiguration(
         main_file=main,
-        account_list_file=folder / "accounts.txt",
         ingestion_destination_file=None,
     )
     cfg = object.__new__(Configuration)
@@ -135,7 +140,10 @@ def test_do_refine_writes_refined_block(
     payload = fake_call["stdin"].payload
     assert payload is not None
     assert payload["transaction_text"] == ORIGINAL_BLOCK
-    assert payload["accounts"] == ["Expenses:Current:Food", "Assets:Cash:CHF"]
+    assert payload["accounts"] == [
+        {"name": "Assets:Cash:CHF"},
+        {"name": "Expenses:Current:Food"},
+    ]
     assert len(payload["documents"]) == 1
     assert payload["documents"][0]["filepath"] == "receipts/2026-03-15.coop.pdf"
     assert payload["documents"][0]["data"]  # base64, non-empty

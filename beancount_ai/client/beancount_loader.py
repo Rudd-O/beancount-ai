@@ -9,11 +9,16 @@ so they can be presented to an LLM for receipt matching.
 from __future__ import annotations
 
 import copy
+import sys
+import warnings
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import TypedDict
+from pathlib import Path
+from typing import Any, TypedDict
 
 from beancount import loader
+
+from beancount_ai.structs import AccountRef
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -48,6 +53,246 @@ class CandidateContext:
     source_file: str
     line_no: int
     transaction_text: str  # full Beancount text, for comparison
+
+
+@dataclass
+class _AccountState:
+    """Per-account open/close history collected while walking the ledger."""
+
+    # Sorted list of (date, entry index, meta) for every `open` directive.
+    opens: list[tuple[date, int, dict[str, Any]]]
+    # Sorted list of (date, entry index) for every `close` directive.
+    closes: list[tuple[date, int]]
+
+
+_USE_MARKERS = ("yes", "recursively")
+
+
+def _validate_beancount_metadata(meta: dict[str, Any], account: str) -> None:
+    """Fail-stop validation of the bean-ai-* metadata keys on one directive.
+
+    Raises ValueError naming the account and the offending value when:
+      - ``bean-ai-include`` or ``bean-ai-exclude`` is present and is not
+        ``"yes"`` or ``"recursively"``; or
+      - ``bean-ai-rules`` is present and is not a string.
+    """
+    for key in ("bean-ai-include", "bean-ai-exclude"):
+        if key in meta:
+            value = meta[key]
+            if not isinstance(value, str) or value not in _USE_MARKERS:
+                raise ValueError(
+                    f"invalid {key} value for {account}: {value!r} "
+                    "(only 'yes' and 'recursively' are accepted)"
+                )
+    if "bean-ai-rules" in meta and not isinstance(meta["bean-ai-rules"], str):
+        raise ValueError(
+            f"bean-ai-rules for {account} is not a string: {meta['bean-ai-rules']!r}"
+        )
+
+
+def _collect_account_state(entries: list[Any]) -> dict[str, _AccountState]:
+    """Walk parsed entries, collecting open/close history per account name.
+
+    ``bean-ai-*`` metadata is validated on *every* open/close entry, so a typo
+    anywhere in the file surfaces immediately.
+    """
+    state: dict[str, _AccountState] = {}
+    for idx, entry in enumerate(entries):
+        tname = type(entry).__name__
+        if tname == "Open":
+            _validate_beancount_metadata(entry.meta, entry.account)
+            st = state.setdefault(entry.account, _AccountState([], []))
+            st.opens.append((entry.date, idx, entry.meta))
+        elif tname == "Close":
+            _validate_beancount_metadata(entry.meta, entry.account)
+            st = state.setdefault(entry.account, _AccountState([], []))
+            st.closes.append((entry.date, idx))
+    for st in state.values():
+        st.opens.sort(key=lambda t: t[:2])
+        st.closes.sort(key=lambda t: t[:2])
+    return state
+
+
+def _live_and_open(
+    state: dict[str, _AccountState], as_of: date
+) -> tuple[list[str], list[tuple[date, int, dict[str, Any]] | None]]:
+    """Return (sorted live accounts, their latest ≤ as_of open entries)."""
+    accounts: list[str] = []
+    opens: list[tuple[date, int, dict[str, Any]] | None] = []
+    for acct in sorted(state):
+        st = state[acct]
+        events = [(d, i, True) for d, i, _ in st.opens if d <= as_of] + [
+            (d, i, False) for d, i in st.closes if d <= as_of
+        ]
+        if not events:
+            continue
+        if not max(events, key=lambda t: t[:2])[2]:
+            continue  # The most recent event ≤ as_of is a close.
+        cands = [t for t in st.opens if t[0] <= as_of]
+        accounts.append(acct)
+        opens.append(cands[-1])
+    return accounts, opens
+
+
+def _included_accounts(
+    state: dict[str, _AccountState], as_of: date, live: set[str]
+) -> set[str]:
+    """Return the live accounts selected by bean-ai-include / bean-ai-exclude.
+
+    * raw-selected: an account's own selected open carries ``bean-ai-include``,
+      **or** a *proper* ancestor's selected open carries
+      ``bean-ai-include: "recursively"`` — even if the ancestor is not itself
+      live at ``as_of`` (a closed parent's policy still applies to its live
+      children).
+    * raw-excluded: an account's own selected open carries ``bean-ai-exclude``
+      with value ``"yes"``, **or** a *proper* ancestor's selected open carries
+      ``bean-ai-exclude: "recursively"``.
+    * carved out: an account that is raw-excluded but whose *own* selected open
+      carries ``bean-ai-include`` (any value) is re-included — an explicit
+      self-include beats an ancestor's recursive exclude.
+
+    Liveness and policy are kept separate: only live accounts are returned,
+    but the include/exclude read from an ancestor does not depend on that
+    ancestor being live.
+    """
+
+    def meta_at(acct: str) -> dict[str, Any] | None:
+        st = state.get(acct)
+        if st is None:
+            return None
+        cands = [t for t in st.opens if t[0] <= as_of]
+        if not cands:
+            return None
+        return cands[-1][2]
+
+    def own_marker(acct: str, key: str) -> str | None:
+        m = meta_at(acct)
+        if m is None:
+            return None
+        v = m.get(key)
+        return v if isinstance(v, str) else None
+
+    def ancestor_recursive(acct: str, key: str) -> bool:
+        parts = acct.split(":")
+        return any(
+            own_marker(":".join(parts[:i]), key) == "recursively"
+            for i in range(1, len(parts))
+        )
+
+    included: set[str] = set()
+    for acct in live:
+        own_inc = own_marker(acct, "bean-ai-include")
+        own_exc = own_marker(acct, "bean-ai-exclude")
+        raw_selected = own_inc is not None or ancestor_recursive(
+            acct, "bean-ai-include"
+        )
+        if not raw_selected:
+            continue
+        raw_excluded = own_exc is not None or ancestor_recursive(
+            acct, "bean-ai-exclude"
+        )
+        if raw_excluded and own_inc is None:
+            continue
+        included.add(acct)
+    return included
+
+
+def load_live_accounts(main_file: str | Path, as_of: date) -> list[AccountRef]:
+    """Return the list of live accounts from the ledger, for the LLM prompt.
+
+    An account is live if it is open (or was closed after ``as_of``) at
+    ``as_of``.  A live account is included if it is selected by
+    ``bean-ai-include`` metadata — either ``"yes"`` on its own selected open
+    (just this account) or ``"recursively"`` on its own or a proper
+    ancestor's selected open (the account and its descendants; the ancestor
+    need not itself be live — closing a parent lets its policy continue to
+    reach its live children) — and is not blocked by
+    ``bean-ai-exclude`` metadata, except that an account with its own explicit
+    ``bean-ai-include`` beats an ancestor's ``"recursively"`` exclude.
+    Accounts are returned sorted by name.  Each account's ``rule`` is taken
+    from its own most recent ``open`` (≤ ``as_of``) carrying ``bean-ai-rules``;
+    it does not inherit.
+
+    Raises on:
+      - a parse or validation error in the ledger (propagated);
+      - a ``bean-ai-include`` / ``bean-ai-exclude`` value other than ``"yes"``
+        / ``"recursively"`` (ValueError naming the account and the offending
+        value);
+      - a non-string ``bean-ai-rules`` value (ValueError).
+    """
+    from beancount.parser import printer
+
+    entries, errors, _ = loader.load_file(main_file)
+    if errors:
+        warnings.warn(
+            f"{main_file} contains {len(errors)} errors; account derivation may not work.  Errors follow:\n\n"
+            + "\n".join(printer.format_error(e) for e in errors)
+        )
+
+    state = _collect_account_state(entries)
+    live_accounts, latest_opens = _live_and_open(state, as_of)
+    live = set(live_accounts)
+    included = _included_accounts(state, as_of, live)
+
+    refs: list[AccountRef] = []
+    for acct, lo in zip(live_accounts, latest_opens):
+        if acct not in included or lo is None:
+            continue
+        n = {"name": acct}
+        if "bean-ai-rules" in lo[2] and lo[2]["bean-ai-rules"].strip():
+            n["rule"] = lo[2]["bean-ai-rules"]
+        refs.append(n)
+    return refs
+
+
+def accounts_for_prompt(
+    main_file: str | Path, run_date: date | None = None
+) -> list[AccountRef]:
+    """Return the account list to send to the LLM.
+
+    Wraps :func:`load_live_accounts` with the run date (defaulting to today)
+    and raises ``RuntimeError("the LLM would be offered no accounts")`` when
+    the derived list is empty — see the "no live accounts" edge case: an empty
+    or near-empty account list is almost always a misconfiguration (most
+    commonly, an un-migrated install), and offering nothing to the LLM
+    guarantees a garbage transaction.
+    """
+    accounts = load_live_accounts(main_file, run_date or date.today())
+    if not accounts:
+        raise RuntimeError("the LLM would be offered no accounts")
+    return accounts
+
+
+def account_refs_or_die(main_file: str | Path, run_date: date) -> list[AccountRef]:
+    """Load the account list to send to the LLM, exiting 1 on failure.
+
+    ``run_date`` is the date the account list is derived "as of": accounts are
+    only offered if they are open (and not yet closed) on that date.  Callers
+    that create a new transaction (process / import) pass ``date.today()``; the
+    refine command passes the existing transaction's own date, so the LLM is
+    offered exactly the accounts that were legal when the transaction was made.
+
+    Fail-stop on purpose: an empty account list (an un-migrated ledger) or an
+    invalid ``bean-ai-*`` metadata value guarantees a garbage transaction, so
+    the command must not proceed.  A ledger with parse or validation errors is
+    equally fatal: the account graph is only meaningful for a consistent file.
+    """
+    try:
+        return accounts_for_prompt(main_file, run_date)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+    except RuntimeError as e:
+        if str(e) == "the LLM would be offered no accounts":
+            print(
+                f'Error: no accounts marked bean-ai-include: "yes" or "recursively" in '
+                f"{main_file}; the LLM would be offered no accounts to post to.  "
+                "Mark the accounts or subtrees you want available (see docs) on their "
+                "'open' directives.",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
 
 
 class MatchResult(TypedDict):

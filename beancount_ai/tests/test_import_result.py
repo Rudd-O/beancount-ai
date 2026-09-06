@@ -35,28 +35,39 @@ SAMPLE_RECEIPT_DATA: bytes = b"%PDF-1.4 fake receipt content\r\n"
 # ===========================================================================
 
 
+MARKED_LEDGER: str = (
+    '2020-01-01 open Expenses:Food\n'
+    '  bean-ai-include: "recursively"\n'
+    '2020-01-01 open Assets:Checking\n'
+    '  bean-ai-include: "recursively"\n'
+)
+
+
 def _make_config(
     folder: pathlib.Path, *, tx_in_ledger: str = ""
 ) -> BeancountConfiguration:
     """Create a minimal *BeancountConfiguration* backed by *folder*.
+
+    The main ledger carries the ``open`` directives (with ``bean-ai-include:
+    "recursively"`` markers) from which the account list is derived — this
+    replaces the old static ``accounts.txt`` file.
 
     Parameters
     ----------
     folder:
         A pre-created tmp directory used for all files.
     tx_in_ledger:
-        Optional content to write into ``imported.bean`` (the ingestion file).
+        Optional extra content to append to the main ledger.
     """
     main = folder / "main.bean"
     with open(main, "w") as fh:
+        fh.write(MARKED_LEDGER)
         if tx_in_ledger:
             fh.write(tx_in_ledger)
     (folder / "imported.bean").write_text("")
-    (folder / "accounts.txt").write_text("Expenses:Food\nAssets:Checking\n")
 
     return BeancountConfiguration(
         main_file=main,
-        account_list_file=folder / "accounts.txt",
         ingestion_destination_file=pathlib.Path("imported.bean"),
     )
 
@@ -125,8 +136,9 @@ class TestInitCalls:
 
         ImportResult(vm, bc, "any.pdf")
 
-        accounts_arg: list[str] = vm.process_receipt.call_args[0][1]
-        assert "Expenses:Food" in accounts_arg
+        accounts_arg: list[dict[str, str]] = vm.process_receipt.call_args[0][1]
+        assert {"name": "Expenses:Food"} in accounts_arg
+        assert {"name": "Assets:Checking"} in accounts_arg
 
     def test_raises_when_ingestion_file_missing(
         self, tmp_path: pathlib.Path, bc: BeancountConfiguration
@@ -388,9 +400,7 @@ class TestRollback:
     def _build_with_state(
         self, folder: pathlib.Path
     ) -> tuple[ImportResult, BeancountConfiguration]:
-        bc: BeancountConfiguration = _make_config(
-            folder, tx_in_ledger="existing content\n"
-        )
+        bc: BeancountConfiguration = _make_config(folder)
         vm: mock.MagicMock = _make_vm()
 
         result: ImportResult = ImportResult(vm, bc, "test.pdf")
@@ -421,11 +431,10 @@ class TestRollback:
         ingest_path: pathlib.Path = tmp_path / "ingest.bean"
         ingest_path.write_text(content_before)
 
-        (tmp_path / "dummy.bean").write_text("")
+        (tmp_path / "dummy.bean").write_text(MARKED_LEDGER)
         (tmp_path / "acct.txt").write_text("")
         bc: BeancountConfiguration = BeancountConfiguration(
             main_file=tmp_path / "dummy.bean",
-            account_list_file=tmp_path / "acct.txt",
             ingestion_destination_file=pathlib.Path("ingest.bean"),
         )
 
@@ -481,11 +490,10 @@ class TestRollback:
         ingest_file: pathlib.Path = tmp_path / "ingest.bean"
         ingest_file.write_text(ingest_content)
 
-        (tmp_path / "dummy.bean").write_text("")
+        (tmp_path / "dummy.bean").write_text(MARKED_LEDGER)
         (tmp_path / "acct.txt").write_text("")
         bc: BeancountConfiguration = BeancountConfiguration(
             main_file=tmp_path / "dummy.bean",
-            account_list_file=tmp_path / "acct.txt",
             ingestion_destination_file=pathlib.Path("ingest.bean"),
         )
 

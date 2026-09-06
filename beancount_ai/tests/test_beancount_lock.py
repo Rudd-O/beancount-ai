@@ -24,10 +24,8 @@ from beancount_ai.client.config import BeancountConfiguration
 def _make_beancount_configuration(folder: pathlib.Path) -> BeancountConfiguration:
     main = folder / "main.bean"
     main.write_text('2026-01-01 * "Seed" "Start"\n  Expenses:Misc  1.00 USD\n')
-    (folder / "accounts.txt").write_text("Expenses:Misc\n")
     return BeancountConfiguration(
         main_file=main,
-        account_list_file=folder / "accounts.txt",
         ingestion_destination_file=None,
     )
 

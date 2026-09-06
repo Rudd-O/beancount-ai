@@ -17,24 +17,19 @@ class BeancountConfiguration:
         ingestion_destination_file: file name (or path relative to the main Beancount file),
                                     to which transactions ingested from receipts will be appended;
                                     if left empty, this will default to your main_file.
-        account_list_file: file name containing a listing of Beancount accounts to consider when
-                           making a transaction during the ingestion process.
     """
 
     main_file: Path
     ingestion_destination_file: Path | None
-    account_list_file: Path
     _lock_fh: IO[bytes] | None
 
     def __init__(
         self,
         main_file: Path,
-        account_list_file: Path,
         ingestion_destination_file: Path | None = None,
     ) -> None:
         self.main_file = main_file
         self.ingestion_destination_file = ingestion_destination_file
-        self.account_list_file = account_list_file
         self._lock_fh = None
         # Lock right away, at instantiation, so that no caller can forget to do it.
         self.lock()
@@ -157,12 +152,18 @@ class Configuration:
             data = json.load(fh)
         instance = cls.__new__(cls)
         instance.target_vm = data.get("target_vm", None)
-        tdf = data["beancount"].get("ingestion_destination_file", None)
+        bean = data["beancount"]
+        if "account_list_file" in bean:
+            raise ValueError(
+                "beancount.account_list_file is no longer used and will "
+                "be ignored; mark your accounts with bean-ai-include / bean-ai-exclude "
+                "in the ledger"
+            )
+        tdf = bean.get("ingestion_destination_file", None)
         if tdf is not None:
             tdf = Path(tdf)
         instance.beancount = BeancountConfiguration(
-            main_file=Path(data["beancount"]["main_file"]),
-            account_list_file=Path(data["beancount"]["account_list_file"]),
+            main_file=Path(bean["main_file"]),
             ingestion_destination_file=tdf,
         )
         cls.instance = instance

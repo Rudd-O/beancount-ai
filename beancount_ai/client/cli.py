@@ -12,6 +12,7 @@ from beancount_ai.client.commands import (
     fetch,
     importcmd,
     ingest,
+    listaccts,
     listcmds,
     organize,
     process,
@@ -44,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         ingest.subcommand_parser,
         associate.subcommand_parser,
         refine.subcommand_parser,
+        listaccts.subcommand_parser,
     ]:
         sp = p(sp)
 
@@ -71,6 +73,7 @@ def main() -> None:
         "remove": remove.run,
         "associate": associate.run,
         "refine": refine.run,
+        "list-accounts": listaccts.run,
     }
     # The BeancountConfiguration was locked when it was instantiated (see
     # Configuration.load); the lock is held for the rest of the process.

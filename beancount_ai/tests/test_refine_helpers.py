@@ -3,6 +3,7 @@
 
 import pathlib
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from beancount_ai.client.beanfiles import (
     extract_document_paths,
     resolve_local_document_path,
+)
+from beancount_ai.client.commands.refine import (
+    _tx_date,  # pyright: ignore[reportPrivateUsage]
 )
 
 
@@ -95,6 +99,32 @@ def test_relative_to_tx_file(tmp_path: pathlib.Path) -> None:
     tx_file = tmp_path / "main.bean"
     # main_folder == tmp_path here, so also disambiguate by creating a conflicting name.
     assert resolve_local_document_path("one.pdf", tx_file) == tmp_path / "one.pdf"
+
+
+# ============================ _tx_date =====================================
+
+
+def test_tx_date_star_flag() -> None:
+    assert _tx_date(_lines('2025-01-01 * "Coop"', "  Exp:Food  10 CHF")) == date(
+        2025, 1, 1
+    )
+
+
+def test_tx_date_exclamation_flag() -> None:
+    assert _tx_date(_lines('2024-12-31 ! "X"', "  Exp:Food  10 CHF")) == date(
+        2024, 12, 31
+    )
+
+
+def test_tx_date_balanced_flag() -> None:
+    assert _tx_date(_lines('2024-02-29 D "X"', "  Exp:Food  10 CHF")) == date(
+        2024, 2, 29
+    )
+
+
+def test_tx_date_rejects_missing_header() -> None:
+    with pytest.raises(ValueError, match="could not read the transaction date"):
+        _tx_date(_lines("  Exp:Food  10 CHF", "  Assets:Cash -10 CHF"))
 
 
 if __name__ == "__main__":

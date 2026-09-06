@@ -19,34 +19,34 @@ from beancount_ai.server.llm import (
     stream_reasoning_and_output,
 )
 from beancount_ai.server.storage import make_receipt_backend
+from beancount_ai.structs import AccountRef, check_account_refs
 
 RECEIPT_CONVERSION_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "RECEIPT_CONVERSION_PROMPT.md"
 )
 
 
-def _read_accounts_and_close_stdin(stdin: IO[str]) -> list[str]:
-    # Read accounts list from stdin (the client).
+def _read_account_refs_and_close_stdin(stdin: IO[str]) -> list[AccountRef]:
+    # Read the account list (a JSON array of {name, rule?} objects) from stdin.
     try:
-        account_lines = cast(list[str], json.loads(stdin.read()))
-        assert isinstance(account_lines, list)
-        assert all(isinstance(ln, str) for ln in account_lines)
-        for n, acc in enumerate(account_lines):
-            acc = acc.splitlines()[0].strip()
-            account_lines[n] = acc
+        data = json.loads(stdin.read())
         stdin.close()
     except Exception as e:
         print(f"error: invalid account list input: {e}", file=sys.stderr)
         sys.exit(1)
 
-    return account_lines
+    try:
+        return check_account_refs(data)
+    except ValueError as reason:
+        print(f"error: invalid account list input: {reason}", file=sys.stderr)
+        sys.exit(1)
 
 
 def run(cfg: Configuration, args: argparse.Namespace) -> None:
     from httpx import Client as HttpxClient
     from openwebui_client import OpenWebUIClient
 
-    account_lines = _read_accounts_and_close_stdin(sys.stdin)
+    account_refs = _read_account_refs_and_close_stdin(sys.stdin)
 
     argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
     fn = os.path.basename(argsfilename)
@@ -60,7 +60,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
         file=sys.stderr,
     )
 
-    account_text = json.dumps(account_lines)
+    account_text = json.dumps(account_refs, indent=2)
     prompt_text = RECEIPT_CONVERSION_PROMPT_PATH.read_text()
     prompt_text = prompt_text.format(accounts=account_text)
 

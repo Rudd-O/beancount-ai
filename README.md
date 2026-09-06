@@ -59,9 +59,17 @@ Bug reports, feature requests and pull requests are welcome!
 
 **Install**: `pip install .` from this repository is the easiest way.  Alternatives include installing in a virtual environment, or [using pre-built Fedora RPMs](https://repo.rudd-o.com/) which deal with the availability of all required dependencies.  The source contains everything you need to build RPM packages including `rpm` and `deps-fedora` targets, but at least one package is not in Fedora (`python3-openwebui-client`) and is only available in the link on this paragraph.
 
-**Configure** — create `~/.config/bean-ai.json` and `~/.config/bean-ai.accounts` (see [Configuration](#configuration) below) for examples.  You'll need a `documents`, an `ai`, and a `beancount` section.
+**Configure** — create `~/.config/bean-ai.json` (see [Configuration](#configuration) below) for an example.  You'll need a `documents`, an `ai`, and a `beancount` section.  You also need to mark in your ledger the accounts the AI is allowed to use (see [Marking accounts](#marking-accounts-in-your-ledger)).
 
-**Kick the tires**.  To list various kinds of receipts:
+**Kick the tires**.
+
+To list the accounts you marked for `bean-ai` to know about:
+
+```bash
+bean-ai list-accounts
+```
+
+To list various kinds of receipts:
 
 ```bash
 bean-ai list-uningested        # receipts not yet imported
@@ -161,8 +169,7 @@ Here is a sample configuration file using the local backend:
 {
   "beancount": {
     "main_file": "/home/user/Documents/Accounting/main.beancount",
-    "ingestion_destination_file": "imported.beancount",
-    "account_list_file": "/home/user/.config/bean-ai.accounts"
+    "ingestion_destination_file": "imported.beancount"
   },
   "ai": {
     "api_url": "https://openwebui.example.com/v1",
@@ -201,21 +208,45 @@ Nextcloud user setup — looks like this:
 }
 ```
 
-You also need a `bean-ai.accounts` (customarily saved to `~/.config`) with all your expense, liability and asset accounts used in your day-to-day transactions.  A good starting point to make this listing should be:
+### Marking accounts in your ledger
 
-```sh
-bean-query Documents/Accounting/00-beancount.bean 'SELECT distinct account ORDER BY account;'
+The list of accounts the AI is offered is **derived from your ledger** at run time. An account is offered only if it is open as of the day you invoke `bean-ai` (an account closed before that day is never offered), and it is selected — and not excluded — by metadata keys attached to `open` directives.
+
+Three metadata keys can be attached to an `open` directive:
+
+- `bean-ai-include: "yes"` — **include this one account** (its live children are *not* pulled in).
+- `bean-ai-include: "recursively"` — **include this account and every live account beneath it.** Placing this on a subtree root (e.g. `Expenses:Food`) is the usual way to opt a whole family in with a single line. `yes` and `recursively` are the only accepted values; any other value is an error. Closing the account does *not* revoke the marker for its still-open children — the policy keeps propagating downward (the same is true of `bean-ai-exclude: "recursively"`).
+- `bean-ai-exclude: "yes"` / `bean-ai-exclude: "recursively"` — **exclude this account** (with `"recursively"`, itself *and* its live descendants) from the list, even where an ancestor's `bean-ai-include: "recursively"` would otherwise have selected it. An account that carries its own explicit `bean-ai-include` beats an ancestor's `bean-ai-exclude: "recursively"`, so you can re-include a specific account inside an excluded subtree.
+- `bean-ai-rules: "..."` — **optional guidance** shown to the LLM next to this one account (it does not inherit from ancestors), e.g. `"Supermarket and grocery runs; includes snacks"`.
+
+Example:
+
+```beancount
+2025-01-01 open Expenses:Food
+  bean-ai-include: "recursively"
+2025-01-01 open Expenses:Food:Groceries
+  bean-ai-rules: "Supermarket and grocery runs; includes snacks"
+2025-01-01 open Expenses:Food:Restaurants
+  bean-ai-rules: "Eating out and delivery; not take-away from supermarkets"
+2025-01-01 open Assets:Cash:CHF
+  bean-ai-include: "yes"
+  bean-ai-rules: "Physical cash on hand, Swiss francs"
+2025-01-01 open Assets:Cash:CHF:In-limbo
+  bean-ai-exclude: "recursively"
+2025-01-01 open Assets:Banks:Main
+  bean-ai-include: "recursively"
 ```
 
-You can append a comment with a space, and a hash sign, and another space to each account, to tune in which circumstances the LLM should consider using that specific account.
+Accounts with no markers are absent by default (opt-in, not opt-out). If *no* account is marked, `bean-ai` refuses to run an account-touching command and points you back to this section.
+
+> **Migration (breaking change):** earlier versions of `bean-ai` read the account list from a static `beancount.account_list_file` (customarily `~/.config/bean-ai.accounts`). That key no longer exists. If your config still carries it, `bean-ai` prints a warning to stderr and ignores it. Migrating is a one-time ledger edit: for each subtree you want the AI to use, add `bean-ai-include: "recursively"` to its root's `open` directive; move any trailing `# ...` comments from the old file into `bean-ai-rules` metadata on the matching `open`; and delete the `account_list_file` key and the file.
 
 ### Parameters
 
 | Field | Type | Description |
 |---|---|---|
-| `beancount.main_file` | `Path` | Path to your main Beancount ledger file. |
+| `beancount.main_file` | `Path` | Path to your main Beancount ledger file. Used to read existing transactions and directives which influence `bean-ai`'s conduct. |
 | `beancount.ingestion_destination_file` | `Path \| null` | File to append ingested transactions to (relative to `main_file`). Defaults to `main_file` itself. |
-| `beancount.account_list_file` | `Path` | File containing the list of accounts to be considered to make transactions when ingesting receipts. |
 | `ai.api_url` | `str` | Base URL of the OpenAI compatible instance (example for an Open-WebUI instance running on a bare IP: `http://10.240.6.7/api/`). |
 | `ai.token` | `str` | API token for authenticating with the AI API. |
 | `ai.model_name` | `str` | Model name to use with the AI API. Must support vision. |
@@ -236,7 +267,7 @@ This program supports *split operation* -- receipts and AI access in one VM (the
 
 To enable this mode of operation:
 
-1. Split your configuration so that client VM only has the `beancount` section, and the server VM has the `documents` and `ai` sections.  The `bean-ai.accounts` file stays in the client.
+1. Split your configuration so that client VM only has the `beancount` section, and the server VM has the `documents` and `ai` sections.  The Beancount ledger stays in the client.
 2. Ensure both client and server VMs have this program installed.  Remember there are [pre-built Fedora RPMs](https://repo.rudd-o.com/) of the `python3-beancount-ai` package and all its dependencies.
 3. Deploy the service files in the `qubes-rpc` folder to `/etc/qubes-rpc` of your server VM.  Depending on where `bean-ai-server` is installed, you may have to adjust the paths in those files.  Ensure all service files are executable.  There [pre-built Fedora RPMs](https://repo.rudd-o.com/) named `python3-beancount-ai-qubes-rpc` that will install these files for you.
 4. Add a `target_vm` key in the client configuration, naming the server VM.

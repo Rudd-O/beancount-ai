@@ -46,6 +46,8 @@ You **must not**:
 
 For each expense and funding leg of the refined transaction, pick the expense / asset / liability / income account most suitable from the following list:
 
+Each account in the list is an object with a `name` (the account to use in the transaction) and, optionally, a `rule` (guidance from the user on when to use that account).  Prefer accounts whose `rule` best matches the item; when no `rule` applies, pick the account whose name is most specific.  Do not use any account not listed.
+
 ```json
 {accounts}
 ```

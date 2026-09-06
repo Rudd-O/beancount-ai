@@ -8,7 +8,7 @@ from typing import IO, Literal, cast
 from colorama import Fore, Style  # type: ignore
 
 from beancount_ai.client.config import Configuration
-from beancount_ai.structs import FetchedReceipt, load_json
+from beancount_ai.structs import AccountRef, FetchedReceipt, load_json
 
 
 def stream_reasoning_and_capture_output(stdout: IO[bytes]) -> str:
@@ -145,14 +145,14 @@ class RemoteVM:
         return cmd, proc, stdin, stdout
 
     def process_receipt(
-        self, filename: str, account_list: list[str]
+        self, filename: str, account_refs: list[AccountRef]
     ) -> tuple[str, str]:
         """
         Calls upon the LLM on the server side to produce a Beancount transaction
         and the main payment account.
         """
         cmd, proc, stdin, stdout = self._call("beanai.Process", arg=filename)
-        acctlist = json.dumps(account_list).encode("utf-8")
+        acctlist = json.dumps(account_refs).encode("utf-8")
         stdin.write(acctlist)
         stdin.close()
 
