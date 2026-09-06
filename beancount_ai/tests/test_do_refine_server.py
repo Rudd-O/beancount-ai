@@ -65,7 +65,7 @@ def test_unsupported_document_extension_skipped(
     }
     stdin_text = json.dumps(req)
     with mock.patch(
-        "openwebui_client.OpenWebUIClient",
+        "openai.OpenAI",
         side_effect=RuntimeError("LLM client reached"),
     ):
         try:

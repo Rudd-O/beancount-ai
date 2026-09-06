@@ -192,7 +192,7 @@ class TestPromptFiller:
             mock.patch.object(sys, "stdin", io.StringIO(stdin_text)),
             mock.patch("httpx.Client", mock.MagicMock),
         ):
-            with mock.patch("openwebui_client.OpenWebUIClient", _fake_client):
+            with mock.patch("openai.OpenAI", _fake_client):
                 with pytest.raises(Exception, match=_LLM_SENTINEL):
                     proc_mod.run(_fake_server_cfg(), args)
 

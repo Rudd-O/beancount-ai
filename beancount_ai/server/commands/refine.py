@@ -5,9 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any, cast
 
-from openai._streaming import Stream
 from openai.types.chat import (
-    ChatCompletionChunk,
     ChatCompletionContentPartImageParam,
     ChatCompletionContentPartTextParam,
     ChatCompletionMessageParam,
@@ -38,7 +36,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     posting-level content may be refined.
     """
     from httpx import Client as HttpxClient
-    from openwebui_client import OpenWebUIClient
+    from openai import OpenAI
 
     request_data_pre = json.loads(sys.stdin.read())
     if (
@@ -105,7 +103,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
         transaction_text=transaction_text, accounts=account_text
     )
 
-    client = OpenWebUIClient(
+    client = OpenAI(
         api_key=cfg.ai.token,
         base_url=cfg.ai.api_url,
         http_client=HttpxClient(verify=ssl_verify_path()),
@@ -126,7 +124,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
         stream=True,
     )
 
-    stream_reasoning_and_output(cast(Stream[ChatCompletionChunk], resp))
+    stream_reasoning_and_output(resp)
 
 
 def subcommand_parser(

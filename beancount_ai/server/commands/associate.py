@@ -3,11 +3,8 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import cast
 
-from openai._streaming import Stream
 from openai.types.chat import (
-    ChatCompletionChunk,
     ChatCompletionContentPartImageParam,
     ChatCompletionContentPartTextParam,
     ChatCompletionMessageParam,
@@ -40,7 +37,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     structured match results to stdout as plain JSON.
     """
     from httpx import Client as HttpxClient
-    from openwebui_client import OpenWebUIClient
+    from openai import OpenAI
 
     argsfilename = bytes.fromhex(args.filename.encode("ascii")).decode("utf-8")
     fn = os.path.basename(argsfilename)
@@ -60,7 +57,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
         print(f"error: cannot read {fn}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    client = OpenWebUIClient(
+    client = OpenAI(
         api_key=cfg.ai.token,
         base_url=cfg.ai.api_url,
         http_client=HttpxClient(verify=ssl_verify_path()),
@@ -90,7 +87,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
         stream=True,
     )
 
-    stream_reasoning_and_output(cast(Stream[ChatCompletionChunk], resp))
+    stream_reasoning_and_output(resp)
 
     # Read candidates from stdin.
     try:
@@ -119,7 +116,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
         stream=True,
     )
 
-    stream_reasoning_and_output(cast(Stream[ChatCompletionChunk], resp))
+    stream_reasoning_and_output(resp)
 
 
 def subcommand_parser(

@@ -38,4 +38,4 @@ ruff:
 
 # Some dependencies will not be installable because they do not exist in Fedora.
 deps-fedora:
-	dnf install -yq --setopt=install_weak_deps=False rpm-build ruff python3-mypy systemd-rpm-macros python-rpm-macros pyproject-rpm-macros python3-tox-current-env python3-build python3-setuptools python3-pytest python3-ruff python3-httpx python3-certifi python3-PyMuPDF python3-webdav4 python3-openwebui-client python3-beancount python3-devel python3-pip
+	dnf install -yq --setopt=install_weak_deps=False rpm-build ruff python3-mypy systemd-rpm-macros python-rpm-macros pyproject-rpm-macros python3-tox-current-env python3-build python3-setuptools python3-pytest python3-ruff python3-httpx python3-certifi python3-PyMuPDF python3-webdav4 python3-openai python3-beancount python3-devel python3-pip

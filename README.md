@@ -57,7 +57,7 @@ Bug reports, feature requests and pull requests are welcome!
 
 **Dependencies**: You will need `xdg-open` from the `xdg-utils` package, and your machine will need access to an LLM via Open-WebUI.
 
-**Install**: `pip install .` from this repository is the easiest way.  Alternatives include installing in a virtual environment, or [using pre-built Fedora RPMs](https://repo.rudd-o.com/) which deal with the availability of all required dependencies.  The source contains everything you need to build RPM packages including `rpm` and `deps-fedora` targets, but at least one package is not in Fedora (`python3-openwebui-client`) and is only available in the link on this paragraph.
+**Install**: `pip install .` from this repository is the easiest way.  Alternatives include installing in a virtual environment, or [using pre-built Fedora RPMs](https://repo.rudd-o.com/) which deal with the availability of all required dependencies (e.g. `python3-beancount`).  The source contains everything you need to build RPM packages including `rpm` and `deps-fedora` targets.
 
 **Configure** — create `~/.config/bean-ai.json` (see [Configuration](#configuration) below) for an example.  You'll need a `documents`, an `ai`, and a `beancount` section.  You also need to mark in your ledger the accounts the AI is allowed to use (see [Marking accounts](#marking-accounts-in-your-ledger)).
 
