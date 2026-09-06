@@ -45,7 +45,6 @@ Additionally:
 ## 6. Code quality
 
 - **`beanfiles.py:classify_by_target_spans`** and friends returns lists of lists of lines which identify a transaction by a list of lines.  It would be a good idea to have an actual `TransactionText` class that contains the lines, and that can provide information about the transaction such as the date, and then callers can use an `isinstance()` check instead of checking for a boolean.  The date extraction present in `refine.py` can then fold as a method of that `TransactionText` class.
-- **Full typing**.  Some files of the program are excluded from type checking by `type: ignore` in the first line.  They should be covered by type checking completely.
 
 ## 7. General
 
