@@ -36,9 +36,9 @@ SAMPLE_RECEIPT_DATA: bytes = b"%PDF-1.4 fake receipt content\r\n"
 
 
 MARKED_LEDGER: str = (
-    '2020-01-01 open Expenses:Food\n'
+    "2020-01-01 open Expenses:Food\n"
     '  bean-ai-include: "recursively"\n'
-    '2020-01-01 open Assets:Checking\n'
+    "2020-01-01 open Assets:Checking\n"
     '  bean-ai-include: "recursively"\n'
 )
 
