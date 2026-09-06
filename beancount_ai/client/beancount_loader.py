@@ -1,10 +1,8 @@
-# type: ignore
 """Thin wrapper around beancount.loader for loading and filtering Beancount transactions.
 
 Useful in the associate flow to find candidate transactions within a date range
 so they can be presented to an LLM for receipt matching.
 """
-# FIXME: fix types.
 
 from __future__ import annotations
 
@@ -14,9 +12,10 @@ import warnings
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Callable, TypedDict, cast
 
 from beancount import loader
+from beancount.core import data
 
 from beancount_ai.structs import AccountRef
 
@@ -90,7 +89,7 @@ def _validate_beancount_metadata(meta: dict[str, Any], account: str) -> None:
         )
 
 
-def _collect_account_state(entries: list[Any]) -> dict[str, _AccountState]:
+def _collect_account_state(entries: data.Directives) -> dict[str, _AccountState]:
     """Walk parsed entries, collecting open/close history per account name.
 
     ``bean-ai-*`` metadata is validated on *every* open/close entry, so a typo
@@ -98,12 +97,11 @@ def _collect_account_state(entries: list[Any]) -> dict[str, _AccountState]:
     """
     state: dict[str, _AccountState] = {}
     for idx, entry in enumerate(entries):
-        tname = type(entry).__name__
-        if tname == "Open":
+        if isinstance(entry, data.Open):
             _validate_beancount_metadata(entry.meta, entry.account)
             st = state.setdefault(entry.account, _AccountState([], []))
             st.opens.append((entry.date, idx, entry.meta))
-        elif tname == "Close":
+        elif isinstance(entry, data.Close):
             _validate_beancount_metadata(entry.meta, entry.account)
             st = state.setdefault(entry.account, _AccountState([], []))
             st.closes.append((entry.date, idx))
@@ -224,9 +222,10 @@ def load_live_accounts(main_file: str | Path, as_of: date) -> list[AccountRef]:
 
     entries, errors, _ = loader.load_file(main_file)
     if errors:
+        format_error = cast("Callable[[data.BeancountError], str]", printer.format_error)
         warnings.warn(
             f"{main_file} contains {len(errors)} errors; account derivation may not work.  Errors follow:\n\n"
-            + "\n".join(printer.format_error(e) for e in errors)
+            + "\n".join(format_error(e) for e in errors)
         )
 
     state = _collect_account_state(entries)
@@ -238,9 +237,10 @@ def load_live_accounts(main_file: str | Path, as_of: date) -> list[AccountRef]:
     for acct, lo in zip(live_accounts, latest_opens):
         if acct not in included or lo is None:
             continue
-        n = {"name": acct}
-        if "bean-ai-rules" in lo[2] and lo[2]["bean-ai-rules"].strip():
-            n["rule"] = lo[2]["bean-ai-rules"]
+        n: AccountRef = {"name": acct}
+        rule = lo[2].get("bean-ai-rules")
+        if isinstance(rule, str) and rule.strip():
+            n["rule"] = rule
         refs.append(n)
     return refs
 
@@ -324,21 +324,23 @@ class MatchResults(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-def _find_paying_posting(postings) -> tuple[float | None, str | None, str | None]:
+def _find_paying_posting(
+    postings: list[data.Posting],
+) -> tuple[float | None, str | None, str | None]:
     """Return (paid_amount, currency, account) from the credit posting.
 
     If multiple credit postings exist, pick the one with the largest
     absolute value — that's the primary funding source.
     """
     # First try: find all credited accounts (negative amounts).
-    credit_candidates: list[tuple[float, str, str]] = []
-    for posting in postings or []:
-        units = getattr(posting, "units", None)
-        if units is None:
+    credit_candidates: list[tuple[float, float, str, str]] = []
+    for posting in postings:
+        units = posting.units
+        if units is None or units.number is None:
             continue
-        number = float(getattr(units, "number", 0))
-        currency = getattr(units, "currency", None) or ""
-        account = getattr(posting, "account", "") or ""
+        number = float(units.number)
+        currency = units.currency
+        account = posting.account
         if not (number < 0 and currency and account):
             continue
         credit_candidates.append((abs(number), number, currency, account))
@@ -353,13 +355,13 @@ def _find_paying_posting(postings) -> tuple[float | None, str | None, str | None
         )
 
     # Fallback: single positive expense leg.
-    pos_amounts = []
-    for posting in postings or []:
-        units = getattr(posting, "units", None)
-        if units is None:
+    pos_amounts: list[tuple[float, str]] = []
+    for posting in postings:
+        units = posting.units
+        if units is None or units.number is None:
             continue
-        number = float(getattr(units, "number", 0))
-        currency = getattr(units, "currency", None) or ""
+        number = float(units.number)
+        currency = units.currency
         if number <= 0 or not currency:
             continue
         pos_amounts.append((round(number, 2), currency))
@@ -367,16 +369,16 @@ def _find_paying_posting(postings) -> tuple[float | None, str | None, str | None
     if len(pos_amounts) == 1:
         return (*pos_amounts[0], None)
 
-    sum_amount = round(sum(a for a, _ in pos_amounts), 2)
+    sum_amount = round(sum((a for a, _ in pos_amounts), 0), 2)
     currencies = {c for _, c in pos_amounts}
     currency = (
-        list(currencies)[0]
+        next(iter(currencies))
         if len(currencies) == 1
         else "?"
         if not currencies
         else "MULTI"
     )
-    return (sum_amount, currency or "?", None)
+    return (sum_amount, currency, None)
 
 
 def load_transactions(
@@ -410,44 +412,38 @@ def load_transactions(
 
     results: list[TransactionInfo] = []
     for entry in entries:
-        # Only Transaction-type entries have postings.
-        if not hasattr(entry, "postings"):
-            continue
-        if not hasattr(entry, "date"):
+        # Only Transaction entries carry postings.
+        if not isinstance(entry, data.Transaction):
             continue
 
-        cur_date = entry.date
-        if cur_date < start_date or cur_date > end_date:
+        if entry.date < start_date or entry.date > end_date:
             continue
 
-        date_str_raw = getattr(entry, "date", None)  # noqa (unused local — intentional clarity)
-        payee = getattr(entry, "payee", None) or None
-        narration = getattr(entry, "narration", None) or None
+        payee = entry.payee or None
+        narration = entry.narration or None
 
         file_path = ""
         line_no = 0
-        if hasattr(entry, "meta") and entry.meta:
-            file_path = entry.meta.get("filename", "")
+        if entry.meta:
+            file_path = str(entry.meta.get("filename", ""))
             line_no = int(entry.meta.get("lineno", 0))
 
         paid_amount, paid_currency, crediting_account = _find_paying_posting(
             entry.postings
         )
 
-        accounts: set[str] = set()
-        for posting in entry.postings or []:
-            accounts.add(getattr(posting, "account", ""))
+        accounts: set[str] = {posting.account for posting in entry.postings}
 
         results.append(
             TransactionInfo(
                 file_path=file_path,
                 line_no=line_no,
-                date=cur_date,
+                date=entry.date,
                 payee=payee,
                 narration=narration,
                 paid_amount=paid_amount,
                 paid_currency=paid_currency,
-                crediting_account=crediting_account,
+                crediting_account=crediting_account or "",
                 accounts=accounts,
             )
         )
@@ -485,9 +481,7 @@ def load_transaction_contexts(
 
     contexts: list[CandidateContext] = []
     for entry in entries:
-        if not hasattr(entry, "postings"):
-            continue
-        if not hasattr(entry, "date"):
+        if not isinstance(entry, data.Transaction):
             continue
 
         text = ""
@@ -506,12 +500,12 @@ def load_transaction_contexts(
 
         file_path = ""
         line_no = 0
-        if hasattr(entry, "meta") and entry.meta:
+        if entry.meta:
             file_path = str(entry.meta.get("filename", ""))
             line_no = int(entry.meta.get("lineno", 0))
 
-        payee = getattr(entry, "payee", None) or None
-        narration = getattr(entry, "narration", None) or None
+        payee = entry.payee or None
+        narration = entry.narration or None
 
         contexts.append(
             CandidateContext(
@@ -520,7 +514,7 @@ def load_transaction_contexts(
                 narration=narration,
                 paid_amount=paid_amount,
                 paid_currency=paid_currency,
-                crediting_account=crediting_account,
+                crediting_account=crediting_account or "",
                 source_file=file_path,
                 line_no=line_no,
                 transaction_text=text,

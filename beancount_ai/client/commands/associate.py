@@ -12,7 +12,7 @@ from textwrap import indent
 from traceback import print_exception
 from typing import cast
 
-from beancount_ai.client.beancount_loader import (  # type:ignore
+from beancount_ai.client.beancount_loader import (
     MatchResults,
     load_transaction_contexts,
 )

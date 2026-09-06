@@ -1,7 +1,7 @@
 import argparse
 from datetime import date
 
-from beancount_ai.client.beancount_loader import (  # type: ignore
+from beancount_ai.client.beancount_loader import (
     account_refs_or_die,
 )
 from beancount_ai.client.config import Configuration
