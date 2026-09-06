@@ -42,11 +42,17 @@ The `associate` subcommand is implemented but remains partially incomplete:
 Additionally:
 - **Hard-coded window** — the ±1/+45 day search window in `do_associate_one` (`client/commands/associate.py:90-93`) is not configurable. For old receipts, users must edit code or wait for a future `--candidate-days` flag.
 
+## 6. Code quality
+
+- **`beanfiles.py:classify_by_target_spans`** and friends returns lists of lists of lines which identify a transaction by a list of lines.  It would be a good idea to have an actual `TransactionText` class that contains the lines, and that can provide information about the transaction such as the date, and then callers can use an `isinstance()` check instead of checking for a boolean.  The date extraction present in `refine.py` can then fold as a method of that `TransactionText` class.
+- **Full typing**.  Some files of the program are excluded from type checking by `type: ignore` in the first line.  They should be covered by type checking completely.
+
 ## 7. General
 
 | Priority | Item |
 |---|---|
 | High | Prompt injectivity for accounts: discover accounts by querying Beancount |
+| Medium | Code quality |
 | Medium | Beancount file edit safety — backup before edit + atomic write |
 | Medium | Un-comment / wire up the `associate` ambiguous match picker from the spec |
 | Medium | Config schema validation (missing keys, empty values) |
