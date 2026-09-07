@@ -11,7 +11,7 @@
 Name:           python-%{package_name}
 Version:        0.7.1
 Release:        %{mybuildnumber}%{?dist}
-Summary:        AI-powered tooling to process Beancount receipts
+Summary:        AI-assisted CLI to help you work on your Beancount ledger
 
 License:        BSD
 URL:            https://github.com/Rudd-O/%{package_name}
@@ -21,7 +21,7 @@ BuildArch:      noarch
 BuildRequires:  pyproject-rpm-macros, python3-devel, python3-setuptools, coreutils
 
 %global _description %{expand:
-A set of programs to help you use AI to import and manage scanned receipts into Beancount.}
+A command-line computer program that helps you keep up with your Beancount accounting, using (self-hosted or commercial) AI.  It assists with frequent time-consuming tasks, like creating a transaction from a receipt, filing receipts with existing transactions, and revising transactions based on receipts.}
 
 %description %_description
 

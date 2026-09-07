@@ -1,17 +1,25 @@
-# Beancount AI: AI-powered accounting assistance for [Beancount](https://beancount.github.io/) ledgers
+# Beancount AI: make your AI maintain your [Beancount](https://beancount.github.io/) ledger
 
-`bean-ai` helps you manage your Beancount accounting data through AI —local or cloud, your choice.
+`bean-ai` is a command-line computer program that helps you keep up with your Beancount accounting, using (self-hosted or commercial) AI.  It assists with frequent time-consuming tasks, like creating a transaction from a receipt, filing receipts with existing transactions, and revising transactions based on receipts.  It's open source, free software — you can install and use it on your desktop computer for free.
 
-## Who is this for?  Is it for me?
+Bug reports, feature requests and pull requests are welcome!
+
+## Who is this for?  Is it for *me?*
 
 * Do you dread typing detailed transactions in your ledger by hand, but you'd like them entered in detail anyway?
-* Do you have receipts available for your transactions?
+* Do you have receipts available for some of your transactions?  (The more the merrier.)
 * Is importing data into your ledger (e.g. using Beangulp) not saving you as much work as you'd expected?
 * Do you have a lot of catching up to do in your accounting?
 * Are you curious about AI, but scared of unleashing a full agent on your computer, or exposing your financial data to others?
-* Are you limited on how much time you can devote to your books?
+* Is the time you can devote to your books limited?
 
 If you answered yes to any of these questions, then **yes, `bean-ai` is for you**.
+
+## What is it *not?*
+
+`bean-ai` is not a general accounting agent or harness.  You can't ask it open-ended questions about your ledger, nor ask it to write arbitrary transactions, or scan your ledger in general.  It's intentionally designed to help with certain (burdensome) tasks concretely, as it doesn't grant the LLM unrestricted access to your files by design; it lives in the part of the assistance spectrum between manually importing CSV files and committing your accounting data to full agentic AI.
+
+## What can it do?
 
 ### Ingest receipts directly into Beancount files
 
@@ -56,15 +64,21 @@ That said:
 
 ### What do I need in order to use this program?
 
-*AI use:* You'll need an OpenAI-compatible LLM (private like Open-WebUI / Ollama or cloud like OpenAI) and an API key from your LLM service to be able to use this project.  Furthermore, whatever model you use needs to be capable of *vision*.  Note that, if you use a local (non-cloud) model, your Beancount and receipt data will always be 100% private.
+*Access to an AI:* You'll need an OpenAI-compatible LLM (private like Open-WebUI / Ollama or cloud like OpenAI) and an API key from your LLM service to be able to use this project.  Furthermore, whatever model you use needs to be capable of *vision*.  Note that, if you use a private (non-cloud) model, your Beancount and receipt data will always be 100% private.
 
-*Receipt source*: in the current iteration of this project, the receipts storage backend only supports WebDAV -- in a future release, local files will be supported as well.
+*Receipts*: two folders where you'll drop receipts:
 
-Bug reports, feature requests and pull requests are welcome!
+1. An uningested receipts folder; `bean-ai` can import (as transactions) and file for you.
+2. An unassociated receipts folder; `bean-ai` can look at them, decide which transaction each belongs to, and file them.
+
+Those folders can be stored:
+
+* In your computer; you manually drop files in them, or use something like Syncthing or Dropbox to feed them from your phone.
+* In a WebDAV server such as a Nextcloud instance; upload receipts on the Web or via your phone, and `bean-ai` can see them.
 
 ## Quick Start
 
-**Dependencies**: You will need `xdg-open` from the `xdg-utils` package installed.
+**Dependencies**: You will need `xdg-open` from the `xdg-utils` package installed.  This is used when the program offers you to preview a receipt alongside a new or edited transaction.
 
 **Install**: `pip install .` from this repository is the easiest way.  Alternatives include installing in a virtual environment, or [using pre-built Fedora RPMs](https://repo.rudd-o.com/) which deal with the availability of all required dependencies (e.g. `python3-beancount`).  The source contains everything you need to build RPM packages including `rpm` and `deps-fedora` targets.
 
