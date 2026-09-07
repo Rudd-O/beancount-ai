@@ -64,6 +64,7 @@ done
 mkdir -p %{buildroot}/%{_bindir}
 cd %{buildroot}/%{_bindir}
 ln -sf %{package_name} bean-ai
+ln -sf %{package_name} bh
 ln -sf %{package_name}-server bean-ai-server
 
 %pyproject_save_files %{module_name}
@@ -75,6 +76,7 @@ ln -sf %{package_name}-server bean-ai-server
 
 %files -n python3-%{package_name} -f %{pyproject_files}
 %{_bindir}/%{package_name}
+%{_bindir}/bh
 %{_bindir}/%{package_name}-server
 %{_bindir}/bean-ai
 %{_bindir}/bean-ai-server

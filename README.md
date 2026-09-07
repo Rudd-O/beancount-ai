@@ -85,6 +85,8 @@ To list the accounts you marked for `beanhand` to know about:
 
 ```bash
 beanhand list-accounts
+# You can also run bh in lieu of beanhand.
+bh list-accounts
 ```
 
 To list various kinds of receipts:
