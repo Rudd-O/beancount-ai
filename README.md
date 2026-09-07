@@ -2,7 +2,7 @@
 
 *Let the clanker think about accounting for you, so you can think of the things you care about.*
 
-`beanhand` is a command-line computer program that assists you with frequent time-consuming tasks, like creating detailed transaction from a receipt, filing receipts with existing transactions, and adding details to transactions based on receipts.  It delegates drudgery like typing or reading receipts to an LLM.  Your data can stay 100% private, if you choose to.  It's open source, free software — you can install and use it on your desktop computer for free.
+`beanhand` is a command-line computer program that assists you with frequent time-consuming tasks, like creating detailed transactions from receipts, filing receipts with existing transactions, and adding details to transactions based on receipts.  It delegates drudgery like typing or reading receipts to an LLM.  Your data can stay 100% private, if you choose to.  It's open source, free software — you can install and use it on your desktop computer for free.
 
 This program used to be called *Beancount AI*, but that name was neither uniquely identifying nor very good.  Beanhand is a more memorable name — a helping hand for your beans.
 
