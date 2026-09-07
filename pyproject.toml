@@ -3,8 +3,8 @@ requires = ["setuptools>=42"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "beancount-ai"
-version = "0.7.1"
+name = "beanhand"
+version = "0.7.2"
 license = "GPL-3.0"
 description = "AI-assisted CLI to help you work on your Beancount ledger"
 requires-python = ">=3.14"
@@ -12,8 +12,8 @@ dependencies = ["openai>=2.0", "beancount>=3.2", "colorama>=0.4", "PyMuPDF>=1.27
 readme = "README.md"
 
 [project.scripts]
-bean-ai-server = "beancount_ai.server.cli:main"
-bean-ai = "beancount_ai.client.cli:main"
+beanhand-server = "beanhand.server.cli:main"
+beanhand = "beanhand.client.cli:main"
 
 [tool.setuptools.package-data]
-"beancount_ai" = ["*.md"]
+"beanhand" = ["*.md"]

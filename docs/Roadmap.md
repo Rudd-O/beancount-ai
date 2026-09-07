@@ -1,6 +1,6 @@
 # Roadmap
 
-Generated from code review of all Python files under `beancount_ai`.
+Generated from code review of all Python files under `beanhand`.
 
 ---
 
@@ -35,7 +35,7 @@ The `associate` subcommand is implemented but remains partially incomplete:
 |---|---|
 | Phase 1 — Receipt date/amount extraction via LLM | **Done** — `HelpAssociateReceipt` processes the receipt with `RECEIPT_INFO_PROMPT.md`. |
 | Phase 2 — Beancount candidate loader (`load_transaction_contexts`) | **Done** — used at `client/commands/associate.py:96` within `do_associate_one`. |
-| Phase 3 — Server-side match subcommand | **Done** — implemented as `beanai.HelpAssociateReceipt`; two-step flow (receipt info first, then candidate matching via stdin). Works. |
+| Phase 3 — Server-side match subcommand | **Done** — implemented as `beanhand.HelpAssociateReceipt`; two-step flow (receipt info first, then candidate matching via stdin). Works. |
 | Phase 4 — Interactive ambiguous-match picker | **Not done** — the ranked-list prompt is commented out at `client/commands/associate.py:139-180` and never reached; instead an exception is raised when matches are ambiguous (`client/commands/associate.py:134-137`). Needs to be un-commented and wired up. |
 
 Additionally:
@@ -65,6 +65,6 @@ This is a list of things we will not fix.  Do not remove anything from this list
 - **Validation of resolved values** — `api_url` should be checked for a trailing `/v1`; `beancount_folder` and `beancount_main_file` should exist at load time; `receipts_username` / `receipts_password` should not be empty. Fail fast with a clear message.
 - **Retry logic** — `RemoteVM.fetch_receipt()`, `RemoteVM.remove_receipt()`, and `RemoteVM.list_receipts()` (`client/server.py`) make one attempt each. A transient network failure on the receipts VM causes the entire import to fail. Add a 3-retry loop with exponential backoff using `tenacity` or a simple helper.
 - **Pagination for large directories** — `Client.ls("/", detail=True)` assumes all receipts fit in one listing. Most WebDAV implementations don't paginate but it's worth protecting against very large directories (thousands of files) by adding a configurable limit + warning to the server-side list handler.
-- **Bean-ai.json client and server config files shared** — Both `bean-ai.json` config schemas share the same file on disk (`~/.config/bean-ai.json`). The server reads its fields first, then the client reads its fields. This is fine and is intended behavior.
-- **Empty `__init__.py` in `beancount_ai/`, `client/`, `server/`** — this program is not a library but a program designed to be consumed via the CLI.
+- **beanhand.json client and server config files shared** — Both `beanhand.json` config schemas share the same file on disk (`~/.config/beanhand.json`). The server reads its fields first, then the client reads its fields. This is fine and is intended behavior.
+- **Empty `__init__.py` in `beanhand/`, `client/`, `server/`** — this program is not a library but a program designed to be consumed via the CLI.
 - **Config singleton reset** — `Configuration.load()` caches at class level (`instance: ClassVar`) with no public reset hook. Testing with multiple configs requires separate processes. Expose `Configuration._reset_instance()` (or similar).  We don't care about configuration resets because the CLI program is a one-shot execution affair.

@@ -1,5 +1,5 @@
 VERSION := $(shell grep ^Version: *spec | sed 's/Version: *//')
-SOURCE := dist/beancount_ai-$(VERSION).tar.gz
+SOURCE := dist/beanhand-$(VERSION).tar.gz
 SRPM := dist/$(shell rpmspec -q --qf "%{name}-%{version}-%{release}.src.rpm\n" *.spec | grep -v python3)
 RPM := dist/$(shell rpmspec -q --qf "noarch/%{name}-%{version}-%{release}.noarch.rpm\n" *.spec | grep python3)
 
@@ -13,7 +13,7 @@ clean:
 tox:
 	tox --current-env
 
-$(SOURCE): qubes-rpc/* beancount_ai/* beancount_ai/*/* beancount_ai/*/*/* MANIFEST.in pyproject.toml tox.ini mypy.ini Makefile docs/* docs/*/*
+$(SOURCE): qubes-rpc/* beanhand/* beanhand/*/* beanhand/*/*/* MANIFEST.in pyproject.toml tox.ini mypy.ini Makefile docs/* docs/*/*
 	python3 -m build
 
 dist: $(SOURCE)
@@ -34,7 +34,7 @@ rpm-notests: $(SRPM)
 qa: tox
 
 ruff:
-	ruff check --select I --select C beancount_ai/ --fix
+	ruff check --select I --select C beanhand/ --fix
 
 # Some dependencies will not be installable because they do not exist in Fedora.
 deps-fedora:

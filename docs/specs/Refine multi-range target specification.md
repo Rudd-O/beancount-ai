@@ -1,4 +1,4 @@
-# Spec: Multi-range target specification for `bean-ai refine`
+# Spec: Multi-range target specification for `beanhand refine`
 
 Status: in development.
 
@@ -6,14 +6,14 @@ Supersedes the single-range (2-arg) and single-transaction (1-arg) invocation fo
 
 ## Overview
 
-Extend `bean-ai refine` so it can accept any number of 1-based line-number or line-range tokens after the file path, e.g.:
+Extend `beanhand refine` so it can accept any number of 1-based line-number or line-range tokens after the file path, e.g.:
 
 ```sh
-bean-ai refine main.bean 1234               # one transaction (same as before)
-bean-ai refine main.bean 1234 5678          # two single-transaction targets
-bean-ai refine main.bean 123-456 789-1010   # two multi-transaction ranges
-bean-ai refine main.bean 1234 789-1010 2000 # mixed, mixed order
-bean-ai refine main.bean 456-end            # every tx from line 456 to end of file
+beanhand refine main.bean 1234               # one transaction (same as before)
+beanhand refine main.bean 1234 5678          # two single-transaction targets
+beanhand refine main.bean 123-456 789-1010   # two multi-transaction ranges
+beanhand refine main.bean 1234 789-1010 2000 # mixed, mixed order
+beanhand refine main.bean 456-end            # every tx from line 456 to end of file
 ```
 
 Each token is independently either:
@@ -32,7 +32,7 @@ Today a user who wants to fix a handful of unrelated transactions in the same fi
 New grammar (the previous 2-positional-arg form is removed, not retained as a fallback):
 
 ```
-bean-ai refine <file_path> <target>+ [--yes | --no] [--clear]
+beanhand refine <file_path> <target>+ [--yes | --no] [--clear]
 
 <target>  ::= <line_no> | <line_no>-<line_no> | <line_no>-end
 ```
@@ -105,7 +105,7 @@ Unchanged: `run()` still loops over the flagged blocks in file order, calls `do_
 ## CLI example sessions
 
 ```sh
-$ bean-ai refine Documents/Accounting/00-beancount.bean 1234 5678
+$ beanhand refine Documents/Accounting/00-beancount.bean 1234 5678
 Refining transaction '2026-01-21 * "Foo"' ...   (whatever tx starts in 1234)
 Apply refined transaction to Documents/Accounting/00-beancount.bean? [y/n/p/q]
 ...
@@ -114,17 +114,17 @@ Apply refined transaction to Documents/Accounting/00-beancount.bean? [y/n/p/q]
 ...
 Updated transactions in Documents/Accounting/00-beancount.bean
 
-$ bean-ai refine Documents/Accounting/00-beancount.bean 123-456 789-1000
+$ beanhand refine Documents/Accounting/00-beancount.bean 123-456 789-1000
 ...refines every tx beginning on lines 123..456 and 789..1000, in file order...
 
-$ bean-ai refine Documents/Accounting/00-beancount.bean 456-end
+$ beanhand refine Documents/Accounting/00-beancount.bean 456-end
 ...refines every tx beginning on line 456 or later, in file order...
 
-$ bean-ai refine Documents/Accounting/00-beancount.bean 1234 789-1012
+$ beanhand refine Documents/Accounting/00-beancount.bean 1234 789-1012
 Error: target ranges are not strictly ascending and non-overlapping: 1234 789-1012
        (token #2 begins before token #1 does)
 
-$ bean-ai refine Documents/Accounting/00-beancount.bean 100-end 200
+$ beanhand refine Documents/Accounting/00-beancount.bean 100-end 200
 Error: target ranges are not strictly ascending and non-overlapping: 100-end 200
        (ranges must not overlap)
 ```
@@ -133,16 +133,16 @@ Error: target ranges are not strictly ascending and non-overlapping: 100-end 200
 
 | File | Change |
 |---|---|
-| `beancount_ai/client/beanfiles.py` | Modify `split_into_transactions_by_range` so it emits **exactly one transaction per `True` group**: instead of grouping the per-line flags with `itertools.groupby()` (which merged consecutive unseparated transactions into a single group), the fold into blocks now starts a new block at every transaction header, so two adjacent transactions with no blank line between them become separate `(True, lineno, lines)` blocks.  This fixes the latent merged-block issue described in "Block extraction" and makes `classify_by_target_spans` a trivial remap.  Add `classify_by_target_spans(tx_lines: list[str], spans: list[tuple[int, int]]) -> list[tuple[bool, int, list[str]]]` (0-based inclusive) alongside it: run the base classifier once over the whole file and re-flag each `True` group by span intersection (walk-back).  Add doctests covering: single single-line token; single range token; multiple disjoint single-line tokens; multiple disjoint range tokens; mixed; walk-back when a single line lands mid-tx; dedup when two spans both select the same tx (via a contrived example). |
-| `beancount_ai/client/commands/refine.py` | Replace the two positional args (`first_line_number`, `last_line_number`) with one `nargs="+"` positional `targets` whose `type=` parses a token into `(start_1, end_1_or_None)` (1-based, `end >= start`, or `None` for the `A-end` form).  Add `validate_target_ranges(targets: list[tuple[int, int\|None]], n_lines: int) -> list[tuple[int,int]]` that first resolves each `None` end to `n_lines`, then enforces rules 1-3 and raises `ValueError` (returning the resolved concrete pairs).  In `run()`: after reading the file, call `validate_target_ranges` (catch `ValueError` → stderr + exit 1, same style as the existing `split_into_transactions_by_range` error path), substitute the new block-extraction call for `classify_by_target_spans(all_lines, spans_0based)`, and drive the existing `do_refine_one` loop over the resulting flagged blocks.  Update `subcommand_parser` and the help string. |
-| `beancount_ai/tests/test_refine_targets.py` | New test module for the token parser and `validate_target_ranges` (accept/Reject matrix for each failure mode, incl. the `A-end` open-range form, its resolution to the file's last line, and the rejection list). |
-| `beancount_ai/tests/test_do_refine.py` | Update `argparse.Namespace(...)` constructions: replace `first_line_number` / `last_line_number` attributes with `targets=[(...)]` (1-based pairs). |
-| `beancount_ai/tests/test_split_at_transaction_by_line_number.py` | Add doctest/unit tests for `classify_by_target_spans` mirroring the existing `split_into_transactions_by_range` test shape. |
+| `beanhand/client/beanfiles.py` | Modify `split_into_transactions_by_range` so it emits **exactly one transaction per `True` group**: instead of grouping the per-line flags with `itertools.groupby()` (which merged consecutive unseparated transactions into a single group), the fold into blocks now starts a new block at every transaction header, so two adjacent transactions with no blank line between them become separate `(True, lineno, lines)` blocks.  This fixes the latent merged-block issue described in "Block extraction" and makes `classify_by_target_spans` a trivial remap.  Add `classify_by_target_spans(tx_lines: list[str], spans: list[tuple[int, int]]) -> list[tuple[bool, int, list[str]]]` (0-based inclusive) alongside it: run the base classifier once over the whole file and re-flag each `True` group by span intersection (walk-back).  Add doctests covering: single single-line token; single range token; multiple disjoint single-line tokens; multiple disjoint range tokens; mixed; walk-back when a single line lands mid-tx; dedup when two spans both select the same tx (via a contrived example). |
+| `beanhand/client/commands/refine.py` | Replace the two positional args (`first_line_number`, `last_line_number`) with one `nargs="+"` positional `targets` whose `type=` parses a token into `(start_1, end_1_or_None)` (1-based, `end >= start`, or `None` for the `A-end` form).  Add `validate_target_ranges(targets: list[tuple[int, int\|None]], n_lines: int) -> list[tuple[int,int]]` that first resolves each `None` end to `n_lines`, then enforces rules 1-3 and raises `ValueError` (returning the resolved concrete pairs).  In `run()`: after reading the file, call `validate_target_ranges` (catch `ValueError` → stderr + exit 1, same style as the existing `split_into_transactions_by_range` error path), substitute the new block-extraction call for `classify_by_target_spans(all_lines, spans_0based)`, and drive the existing `do_refine_one` loop over the resulting flagged blocks.  Update `subcommand_parser` and the help string. |
+| `beanhand/tests/test_refine_targets.py` | New test module for the token parser and `validate_target_ranges` (accept/Reject matrix for each failure mode, incl. the `A-end` open-range form, its resolution to the file's last line, and the rejection list). |
+| `beanhand/tests/test_do_refine.py` | Update `argparse.Namespace(...)` constructions: replace `first_line_number` / `last_line_number` attributes with `targets=[(...)]` (1-based pairs). |
+| `beanhand/tests/test_split_at_transaction_by_line_number.py` | Add doctest/unit tests for `classify_by_target_spans` mirroring the existing `split_into_transactions_by_range` test shape. |
 | `docs/specs/Refine existing Beancount transactions.md` | Add a pointer at the top: "The target-specification grammar described here is superseded by `docs/specs/Refine multi-range target specification.md`.  See that document for the CLI argument format; the rest of this document (flow, prompt, server-side protocol) still applies." |
 
 ## Backwards compatibility
 
-None is preserved.  The old `bean-ai refine <file> <n>` and `bean-ai refine <file> <n> <m>` invocations are rejected by the new parser (a bare single line number still happens to be accepted as `<target> == <line_no>`, so `bean-ai refine f 42` keeps working; but a 3-arg form like `bean-ai refine f 42 200` — previously "range 42..200" — is now rejected because `200` is a *second single target* meaning tx at line 200, which is a different meaning.  This is an acceptable, documented break given there is a single user and no scripts currently use this command.)
+None is preserved.  The old `beanhand refine <file> <n>` and `beanhand refine <file> <n> <m>` invocations are rejected by the new parser (a bare single line number still happens to be accepted as `<target> == <line_no>`, so `beanhand refine f 42` keeps working; but a 3-arg form like `beanhand refine f 42 200` — previously "range 42..200" — is now rejected because `200` is a *second single target* meaning tx at line 200, which is a different meaning.  This is an acceptable, documented break given there is a single user and no scripts currently use this command.)
 
 ## Open questions
 

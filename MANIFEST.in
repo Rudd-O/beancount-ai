@@ -2,9 +2,9 @@ include *.md
 include tox.ini
 include docs/*
 include docs/*/*
-include beancount_ai/server/*.md
+include beanhand/server/*.md
 include qubes-rpc/*
-include beancount_ai/tests/*.beancount
+include beanhand/tests/*.beancount
 include Makefile
 include README.md
 include mypy.ini

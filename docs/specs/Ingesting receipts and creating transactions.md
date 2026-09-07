@@ -11,8 +11,8 @@ This feature adds the `ingest` CLI subcommand that processes new receipts from t
 ```
 1. List uningested receipts from server (WebDAV "uningested" folder)
 2. For each receipt (interactive or batch):
-   a. Fetch receipt bytes from server (beanai.Fetch)
-   b. Process via LLM to produce Beancount transaction + payment accounts (beanai.Process)
+   a. Fetch receipt bytes from server (beanhand.Fetch)
+   b. Process via LLM to produce Beancount transaction + payment accounts (beanhand.Process)
    c. Predict receipt destination path under <beancount_folder>/<account>/
    d. Format transaction with document: metadata pointing to receipt file
    e. Apply user confirmation (y/n/p/q in interactive mode)
@@ -27,14 +27,14 @@ This feature adds the `ingest` CLI subcommand that processes new receipts from t
 
 The server maintains two separate WebDAV folders tracked via `list_receipts()`:
 
-| Category | Folder name (`beanai.List…`) | Purpose |
+| Category | Folder name (`beanhand.List…`) | Purpose |
 |---|---|---|
-| **Uningested** | `uningested` (via `beanai.ListUningested`) | New receipts waiting to be imported as new transactions |
-| **Unassociated** | `unassociated` (via `beanai.ListUnassociated`) | Receipts already ingested but not linked to existing transactions |
+| **Uningested** | `uningested` (via `beanhand.ListUningested`) | New receipts waiting to be imported as new transactions |
+| **Unassociated** | `unassociated` (via `beanhand.ListUnassociated`) | Receipts already ingested but not linked to existing transactions |
 
 The `ingest` command only operates on `uningested` receipts. The `associate` command operates on `unassociated` receipts. This separation is enforced by distinct list subcommands and the `list_receipts("uningested")` / `list_receipts("unassociated")` parameter.
 
-## Server-side: `beanai.Process` subcommand
+## Server-side: `beanhand.Process` subcommand
 
 The server's `run()` handler (in `server/commands/process.py`) performs a **single LLM pass** using `RECEIPT_CONVERSION_PROMPT.md` (~146 lines):
 
@@ -52,7 +52,7 @@ The LLM prompt instructs the model to:
 
 The prompt includes a complete Beancount transaction example showing date format, flag (`!`), payee in double quotes, narration in double quotes, indented posting legs with two-space indent, metadata narration/explanation entries with four-space indent, and negative amounts for payment/income legs.
 
-## Client-side: `bean-ai ingest` (`run()` in `client/commands/ingest.py`)
+## Client-side: `beanhand ingest` (`run()` in `client/commands/ingest.py`)
 
 ### Configuration: account list file
 
@@ -111,7 +111,7 @@ class ImportResult:
 ```
 
 Constructor (`__init__`):
-1. `vm.fetch_receipt(filename)` — downloads raw bytes via `beanai.Fetch`
+1. `vm.fetch_receipt(filename)` — downloads raw bytes via `beanhand.Fetch`
 2. `vm.process_receipt(filename, beancount.account_list_file.read_text().splitlines())` — sends account list as JSON to server via stdin, streams LLM response, parses JSON for transaction text and payment accounts list
 3. Strips headline comment lines (lines starting with `;`) from the start of the transaction
 4. Extracts date string (first field before space) and description (payee + narration after flag, stripped of quotes/semicolons)
@@ -135,7 +135,7 @@ Rollback (`rollback()` method):
 
 ### Comment stripping
 
-After processing through `beanai.Process`, the LLM may return a transaction prefixed with comment lines (used for inlined reasoning). These are stripped:
+After processing through `beanhand.Process`, the LLM may return a transaction prefixed with comment lines (used for inlined reasoning). These are stripped:
 
 ```python
 while beancount_transaction.lstrip().startswith(";"):
@@ -197,12 +197,12 @@ def predict_receipt_destination_path(
 
 Read from Beancount config (`cfg.beancount.ingestion_destination_path`). The formatted transaction is **appended** (written to end of file, not a new line in an existing transaction block). Each import adds `\n\n<transaction_text>\n` to the end of this file.
 
-## CLI: `bean-ai ingest` subcommand
+## CLI: `beanhand ingest` subcommand
 
 ### Arguments
 
 ```
-bean-ai ingest [filename ...] [--yes|-y | --no|-n]
+beanhand ingest [filename ...] [--yes|-y | --no|-n]
 ```
 
 | Positional arg | Meaning |
@@ -248,7 +248,7 @@ When user presses `p` during interactive prompting, `_preview_receipt()` is call
 
 ## Comparison: ingest vs associate
 
-| Aspect | Ingest (`bean-ai ingest`) | Associate (`bean-ai associate`) |
+| Aspect | Ingest (`beanhand ingest`) | Associate (`beanhand associate`) |
 |---|---|---|
 | WebDAV folder | `uningested` | `unassociated` |
 | Transaction source | New transaction created by LLM | Existing transaction found in ledger |
@@ -257,7 +257,7 @@ When user presses `p` during interactive prompting, `_preview_receipt()` is call
 | Date window | Date from receipt image (LLM-extracted) | `-1 day / +45 days` around receipt date |
 | Ambiguity handling | N/A | Error on ambiguous match (prompt stubbed out) |
 | Prompt used | `RECEIPT_CONVERSION_PROMPT.md` (~146 lines) | `RECEIPT_INFO_PROMPT.md` + `RECEIPT_MATCH_PROMPT.md` (~25 lines combined) |
-| Server subcommand(s) | `beanai.Process` (single LLM pass) | `beanai.HelpAssociateReceipt` (two LLM passes) |
+| Server subcommand(s) | `beanhand.Process` (single LLM pass) | `beanhand.HelpAssociateReceipt` (two LLM passes) |
 | File writes | Appends to ingest file + writes receipt | Only writes receipt; edits tx source file in-place |
 | Post-success cleanup | Removes receipt from WebDAV | Removes receipt from WebDAV |
 

@@ -18,9 +18,9 @@ This feature adds a new `associate` CLI subcommand that pairs receipt files alre
 
 ## How it works now
 
-### Server-side: `beanai.HelpAssociateReceipt` (single subcommand)
+### Server-side: `beanhand.HelpAssociateReceipt` (single subcommand)
 
-The server uses a **single** subcommand `beanai.HelpAssociateReceipt` that does two LLM passes sequentially:
+The server uses a **single** subcommand `beanhand.HelpAssociateReceipt` that does two LLM passes sequentially:
 
 1. **Receipt info pass**: Uses `RECEIPT_INFO_PROMPT.md` with the receipt image to extract `{date, amount}`. The prompt instructs the LLM to look at both the receipt content and file name for date; if ambiguous, it omits the field.
 2. **Candidate reading**: Reads candidates JSON from **stdin** (the client writes them before the second pass).
@@ -28,7 +28,7 @@ The server uses a **single** subcommand `beanai.HelpAssociateReceipt` that does 
 
 Candidates are passed via stdin as hex-encoded JSON (standard qrexec transport). Server reads them with `sys.stdin.read()` then calls `json.loads()`. Injection prevention is done by parsing JSON strictly (no raw text interpolation into the prompt — candidates are serialized to JSON string and inserted via `.format()` into a fixed template).
 
-### Client-side: `bean-ai associate` subcommand
+### Client-side: `beanhand associate` subcommand
 
 The client command flow (`run()`, with its inner `do_associate_one()`, in `client/commands/associate.py`):
 
@@ -39,7 +39,7 @@ The client command flow (`run()`, with its inner `do_associate_one()`, in `clien
 5. **Ambiguity check**: If `ambiguous=true` or `top_score < 0.8`, raises an exception and aborts (no user prompt — candidate presentation code is dead/stubbed out)
 6. Selected transaction's source file and line number are resolved from the match result
 7. Document metadata updated via `update_document_metadata()` — newest receipt path becomes `document:`, existing ones renumbered to `document2:`, `document3:`, etc.
-8. Receipt downloaded via `beanai.Fetch` and organized into `<beancount_folder>/<account>/` with date-prefixed filename
+8. Receipt downloaded via `beanhand.Fetch` and organized into `<beancount_folder>/<account>/` with date-prefixed filename
 9. Original receipt removed from WebDAV `unassociated` folder after all writes succeed
 
 ### Beancount candidate loading (`beancount_loader.py`)
@@ -115,18 +115,18 @@ Receipt destination path uses `predict_receipt_destination_path()`: format is `<
 
 | File | Purpose |
 |---|---|
-| `beancount_ai/client/beancount_loader.py` | Loads Beancount via `beancount.loader`, extracts TransactionInfo + CandidateContext structs |
-| `beancount_ai/server/RECEIPT_INFO_PROMPT.md` | Slimmed-down LLM prompt for date/amount extraction (not full transaction generation) |
-| `beancount_ai/server/RECEIPT_MATCH_PROMPT.md` | Short LLM prompt (~20 lines) for candidate ranking/matching |
+| `beanhand/client/beancount_loader.py` | Loads Beancount via `beancount.loader`, extracts TransactionInfo + CandidateContext structs |
+| `beanhand/server/RECEIPT_INFO_PROMPT.md` | Slimmed-down LLM prompt for date/amount extraction (not full transaction generation) |
+| `beanhand/server/RECEIPT_MATCH_PROMPT.md` | Short LLM prompt (~20 lines) for candidate ranking/matching |
 
 **Modified files:**
 
 | File | Changes |
 |---|---|
-| `beancount_ai/client/commands/associate.py` | `associate` subcommand (`run()` + inner `do_associate_one()`) flow logic: candidate usage, metadata update, receipt organization |
-| `beancount_ai/client/beanfiles.py` | `update_document_metadata()` (doc-metadata renumbering/insertion) used by the command |
-| `beancount_ai/client/beancount_loader.py` | `load_transactions()` / `load_transaction_contexts()` client-side usage |
-| `beancount_ai/server/commands/associate.py` | `beanai.HelpAssociateReceipt` handler (`run()`): two LLM passes (info + match), stdin candidate reading |
+| `beanhand/client/commands/associate.py` | `associate` subcommand (`run()` + inner `do_associate_one()`) flow logic: candidate usage, metadata update, receipt organization |
+| `beanhand/client/beanfiles.py` | `update_document_metadata()` (doc-metadata renumbering/insertion) used by the command |
+| `beanhand/client/beancount_loader.py` | `load_transactions()` / `load_transaction_contexts()` client-side usage |
+| `beanhand/server/commands/associate.py` | `beanhand.HelpAssociateReceipt` handler (`run()`): two LLM passes (info + match), stdin candidate reading |
 
 ## Implementation order (actual, not planned)
 

@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Integration-style tests for the client's do_refine (LLM/VM interactions mocked)."""
+
+import argparse
+import io
+import json
+import pathlib
+import sys
+from typing import Any
+from unittest import mock
+
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
+
+from beanhand.client import server as client_cli
+from beanhand.client.commands import refine
+from beanhand.client.config import BeancountConfiguration, Configuration
+
+ORIGINAL_BLOCK = (
+    '2026-03-15 * "Coop" "Groceries"\n'
+    '  document: "receipts/2026-03-15.coop.pdf"\n'
+    "  Expenses:Current:Food    45.00 CHF\n"
+    "  Assets:Cash:CHF        -45.00 CHF\n"
+)
+
+REFINED_BLOCK = (
+    '2026-03-15 ! "Coop Supermarket" "Groceries"\n'
+    '  document: "receipts/2026-03-15.coop.pdf"\n'
+    "  Expenses:Current:Food:Groceries    38.25 CHF\n"
+    "  Expenses:Current:Food:Snacks       12.75 CHF\n"
+    "  Assets:Cash:CHF                  -58.25 CHF\n"
+)
+
+
+def _make_config(folder: pathlib.Path) -> Configuration:
+    main = folder / "main.bean"
+    main.write_text(
+        "; header comment above tx\n" + ORIGINAL_BLOCK + "\n"
+        '2026-04-01 * "Other" "Unchanged"\n'
+        "  Expenses:Other   1.00 CHF\n"
+        "  Assets:Cash:CHF  -1.00 CHF\n"
+        "\n"
+        "2020-01-01 open Expenses:Other\n"
+        "2020-01-01 open Expenses:Current:Food\n"
+        '  beanhand-include: "recursively"\n'
+        "2020-01-01 open Assets:Cash:CHF\n"
+        '  beanhand-include: "recursively"\n'
+    )
+    (folder / "receipts").mkdir()
+    (folder / "receipts" / "2026-03-15.coop.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    bc = BeancountConfiguration(
+        main_file=main,
+        ingestion_destination_file=None,
+    )
+    cfg = object.__new__(Configuration)
+    cfg.target_vm = None
+    cfg.beancount = bc
+    return cfg
+
+
+def _jsonl_stream(llm_output: str) -> str:
+    """Emit the JSONL protocol for a single-output LLM response."""
+    payload = (
+        {"reasoning": "thinking..."},
+        {"output": llm_output},
+        {"finish": "stop"},
+    )
+    return "\n".join(json.dumps(p) for p in payload) + "\n"
+
+
+class _StdinCapture(io.BytesIO):
+    """A BytesIO that records the JSON payload written into it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.payload: dict[str, Any] | None = None
+
+    def write(self, b: bytes) -> int:  # type: ignore[override]
+        self.payload = json.loads(b.decode("utf-8"))
+        return super().write(b)
+
+
+@pytest.fixture
+def fake_call(monkeypatch: "pytest.MonkeyPatch") -> dict[str, Any]:
+    """Patched RemoteVM._call emitting a canned LLM output. Returns a control dict."""
+    state: dict[str, Any] = {
+        "llm_output": "",
+        "proc": mock.MagicMock(),
+        # Optional callable invoked while the (simulated) LLM call is in flight,
+        # to model an external actor editing the ledger during that window.
+        "mutate": None,
+    }
+    state["proc"].wait.return_value = 0
+
+    def _fake_call(
+        self: object, action: str, arg: str | None = None
+    ) -> tuple[list[str], mock.MagicMock, _StdinCapture, io.BytesIO]:
+        assert action == "beanhand.Refine", action
+        assert arg is None  # refine carries no CLI argument
+        stdin = _StdinCapture()
+        state["stdin"] = stdin  # do_refine writes the payload into it
+        if state["mutate"] is not None:
+            state["mutate"]()  # simulate an external edit mid-processing
+        stdout = io.BytesIO(_jsonl_stream(state["llm_output"]).encode("utf-8"))
+        return (["cmd"], state["proc"], stdin, stdout)
+
+    monkeypatch.setattr(client_cli.RemoteVM, "_call", _fake_call)
+    return state
+
+
+def test_do_refine_writes_refined_block(
+    tmp_path: pathlib.Path, fake_call: dict[str, Any]
+) -> None:
+    cfg = _make_config(tmp_path)
+    fake_call["llm_output"] = json.dumps(
+        {"transaction": REFINED_BLOCK, "changes_summary": "split expenses"}
+    )
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "main.bean"),
+        targets=[(2, 2)],
+        yes=True,
+        no=False,
+        clear=False,
+        only_show_affected=False,
+    )
+
+    refine.run(cfg, args)
+
+    new_content = (tmp_path / "main.bean").read_text(encoding="utf-8")
+    assert '2026-03-15 ! "Coop Supermarket"' in new_content
+    assert "Expenses:Current:Food:Snacks" in new_content
+    # The other transaction must be untouched.
+    assert '2026-04-01 * "Other"' in new_content
+    # The header comment above the refined transaction is preserved.
+    assert new_content.startswith("; header comment above tx\n")
+
+    # The server received a well-formed refine request.
+    payload = fake_call["stdin"].payload
+    assert payload is not None
+    assert payload["transaction_text"] == ORIGINAL_BLOCK
+    assert payload["accounts"] == [
+        {"name": "Assets:Cash:CHF"},
+        {"name": "Expenses:Current:Food"},
+    ]
+    assert len(payload["documents"]) == 1
+    assert payload["documents"][0]["filepath"] == "receipts/2026-03-15.coop.pdf"
+    assert payload["documents"][0]["data"]  # base64, non-empty
+
+
+def test_do_refine_no_flag_does_not_write(
+    tmp_path: pathlib.Path,
+    fake_call: dict[str, Any],
+    capsys: "pytest.CaptureFixture[str]",
+) -> None:
+    cfg = _make_config(tmp_path)
+    fake_call["llm_output"] = json.dumps({"transaction": REFINED_BLOCK})
+    original = (tmp_path / "main.bean").read_text(encoding="utf-8")
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "main.bean"),
+        targets=[(2, 2)],
+        yes=False,
+        no=True,
+        clear=False,
+        only_show_affected=False,
+    )
+    refine.run(cfg, args)
+    assert (tmp_path / "main.bean").read_text(encoding="utf-8") == original
+    assert "--no requested" in capsys.readouterr().err
+
+
+def test_do_refine_rejects_write_if_file_edited_while_running(
+    tmp_path: pathlib.Path,
+    fake_call: dict[str, Any],
+    capsys: "pytest.CaptureFixture[str]",
+) -> None:
+    """If the ledger is edited while the LLM call is in flight, refuse to write.
+
+    This is the clobber-prevention guarantee: the user's concurrent edit must
+    survive, and beanhand must exit non-zero rather than overwrite it.
+    """
+    cfg = _make_config(tmp_path)
+    bean = tmp_path / "main.bean"
+    fake_call["llm_output"] = json.dumps({"transaction": REFINED_BLOCK})
+
+    # Model an external editor writing to the file while beanhand "talks to the LLM".
+    user_edit = bean.read_text(encoding="utf-8") + '2026-09-01 * "User" "Edit"\n'
+    fake_call["mutate"] = lambda: bean.write_text(user_edit, encoding="utf-8")
+
+    args = argparse.Namespace(
+        file_path=str(bean),
+        targets=[(2, 2)],
+        yes=True,
+        no=False,
+        clear=False,
+        only_show_affected=False,
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        refine.run(cfg, args)
+
+    assert exc.value.code == 1
+    # The user's edit is preserved intact; the LLM's refinement was NOT applied.
+    assert bean.read_text(encoding="utf-8") == user_edit
+    assert "Coop Supermarket" not in bean.read_text(encoding="utf-8")
+    assert "modified since beanhand read it" in capsys.readouterr().err
+
+
+def test_do_refine_missing_file(
+    tmp_path: pathlib.Path, capsys: "pytest.CaptureFixture[str]"
+) -> None:
+    cfg = _make_config(tmp_path)
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "nope.bean"),
+        targets=[(1, 1)],
+        yes=True,
+        no=False,
+        clear=False,
+        only_show_affected=False,
+    )
+    with pytest.raises(SystemExit):
+        refine.run(cfg, args)
+    assert "file not found" in capsys.readouterr().err
+
+
+def test_do_refine_line_not_in_transaction(
+    tmp_path: pathlib.Path, capsys: "pytest.CaptureFixture[str]"
+) -> None:
+    cfg = _make_config(tmp_path)
+    # Line 1 is the comment header, not part of any transaction.
+    b4 = (tmp_path / "main.bean").read_text()
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "main.bean"),
+        targets=[(1, 1)],
+        yes=True,
+        no=False,
+        clear=False,
+        only_show_affected=False,
+    )
+    refine.run(cfg, args)
+    af = (tmp_path / "main.bean").read_text()
+    assert b4 == af
+
+
+def test_do_refine_malformed_llm_output(
+    tmp_path: pathlib.Path,
+    fake_call: dict[str, Any],
+    capsys: "pytest.CaptureFixture[str]",
+) -> None:
+    cfg = _make_config(tmp_path)
+    fake_call["llm_output"] = "not json at all"
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "main.bean"),
+        targets=[(2, 2)],
+        yes=True,
+        no=False,
+        clear=False,
+        only_show_affected=False,
+    )
+    with pytest.raises(SystemExit):
+        refine.run(cfg, args)
+    assert "could not parse LLM response" in capsys.readouterr().err
+
+
+def test_do_refine_interactive_no(
+    tmp_path: pathlib.Path, fake_call: dict[str, Any]
+) -> None:
+    """Answering 'n' at the prompt leaves the file untouched and returns normally."""
+    cfg = _make_config(tmp_path)
+    fake_call["llm_output"] = json.dumps({"transaction": REFINED_BLOCK})
+    original = (tmp_path / "main.bean").read_text(encoding="utf-8")
+    args = argparse.Namespace(
+        file_path=str(tmp_path / "main.bean"),
+        targets=[(2, 2)],
+        yes=False,
+        no=False,
+        clear=False,
+        only_show_affected=False,
+    )
+    with mock.patch.object(refine, "input", side_effect=["n"]):
+        refine.run(cfg, args)
+    assert (tmp_path / "main.bean").read_text(encoding="utf-8") == original
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-v"]))

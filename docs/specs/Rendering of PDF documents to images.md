@@ -4,7 +4,7 @@ Status: developed.
 
 ## Overview
 
-PDF receipts are converted page-by-page into PNG images via the `render_pdf_pages_to_png()` function in `beancount_ai/server/pdf.py`.  We do this because vision LLMs often simply cannot read PDFs as images; in many instances they attempt to fall back to OCRed or native PDF text, which isn't as precise for reading text (e.g. OCRed text from skewed receipts), and throws away the visual context — the positioning of each of the elements in the page.
+PDF receipts are converted page-by-page into PNG images via the `render_pdf_pages_to_png()` function in `beanhand/server/pdf.py`.  We do this because vision LLMs often simply cannot read PDFs as images; in many instances they attempt to fall back to OCRed or native PDF text, which isn't as precise for reading text (e.g. OCRed text from skewed receipts), and throws away the visual context — the positioning of each of the elements in the page.
 
 The PNG output is what is sent (as base64-encoded image parts) to an OpenAI-compatible LLM for vision-based receipt parsing. This spec describes the rendering pipeline, DPI handling, and safety gates.
 

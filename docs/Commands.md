@@ -4,9 +4,9 @@ All commands rely on configuration parameters, documented in `README.md`.
 
 ---
 
-## bean-ai (client)
+## beanhand (client)
 
-Runs on the machine with Beancount data. Abstracts away the transport layer entirely — it talks to `bean-ai-server` via qrexec or a local subprocess.
+Runs on the machine with Beancount data. Abstracts away the transport layer entirely — it talks to `beanhand-server` via qrexec or a local subprocess.
 
 ### Options
 
@@ -20,24 +20,24 @@ Print one receipt filename per line (bare filenames, no path).
 
 | Command | Description |
 |---|---|
-| `bean-ai list-uningested` | Receipts not yet imported as transactions |
-| `bean-ai list-unassociated` | Receipts not yet linked to an existing transaction |
+| `beanhand list-uningested` | Receipts not yet imported as transactions |
+| `beanhand list-unassociated` | Receipts not yet linked to an existing transaction |
 
 ### Receipt import and ingestion
 
 | Command | Flags | Arguments | Description |
 |---|---|---|---|
-| `bean-ai ingest` | `[--yes \| --no]` | `[<filename>]` | Process all uningested receipts. Without filenames, processes everything on the server. With filenames, processes only those (they must exist). Interactive: prompts `y/n/p/q` for each receipt (`p` previews in your image / PDF viewer, `q` aborts). With `--yes`: auto-import. With `--no`: do all work but don't touch files (dry run). |
-| `bean-ai import <filename>` | — | — | Full pipeline for a single receipt (fetch → LLM → organize → append). Leaves the receipt on the server instead of deleting it. |
+| `beanhand ingest` | `[--yes \| --no]` | `[<filename>]` | Process all uningested receipts. Without filenames, processes everything on the server. With filenames, processes only those (they must exist). Interactive: prompts `y/n/p/q` for each receipt (`p` previews in your image / PDF viewer, `q` aborts). With `--yes`: auto-import. With `--no`: do all work but don't touch files (dry run). |
+| `beanhand import <filename>` | — | — | Full pipeline for a single receipt (fetch → LLM → organize → append). Leaves the receipt on the server instead of deleting it. |
 
 ### Receipt organization and management
 
 | Command | Arguments | Description |
 |---|---|---|
-| `bean-ai process <filename>` | `<filename>` | Extract transaction data via LLM. Prints Beancount tx to stdout, `Main account: <account>` to stderr. |
-| `bean-ai organize <filename> <date> <account>` | `<filename> <YYYY-MM-DD> <account>` | Download a receipt and file it under `<beancount_folder>/<account_with_slashes>/`. Useful when you already know the data. Filename format: `<date>.<original_filename>`. |
-| `bean-ai fetch <filename> <destination>` | `<filename> <local_path>` | Download a receipt from the server to a local path. Tries ingestion URL first, then association URL. |
-| `bean-ai remove <filename>` | `<filename>` | Delete a receipt from the server (tries ingestion URL first, association second). Exit code 0 on success, 1 on failure. |
+| `beanhand process <filename>` | `<filename>` | Extract transaction data via LLM. Prints Beancount tx to stdout, `Main account: <account>` to stderr. |
+| `beanhand organize <filename> <date> <account>` | `<filename> <YYYY-MM-DD> <account>` | Download a receipt and file it under `<beancount_folder>/<account_with_slashes>/`. Useful when you already know the data. Filename format: `<date>.<original_filename>`. |
+| `beanhand fetch <filename> <destination>` | `<filename> <local_path>` | Download a receipt from the server to a local path. Tries ingestion URL first, then association URL. |
+| `beanhand remove <filename>` | `<filename>` | Delete a receipt from the server (tries ingestion URL first, association second). Exit code 0 on success, 1 on failure. |
 
 ### Receipt association
 
@@ -45,7 +45,7 @@ Link a receipt to an existing Beancount transaction (for receipts from banks/mer
 
 | Command | Flags | Arguments | Description |
 |---|---|---|---|
-| `bean-ai associate` | `[--yes \| --no]` | `[<filename>]` | Associate one or more receipts with existing transactions. Without filenames, processes all unassociated receipts. With filenames, processes only those (they must exist). The flow: (1) LLM extracts date + amount from receipt; (2) queries Beancount for candidates within 1 day before to 45 days after receipt date; (3) LLM ranks candidates by match probability; (4) if unambiguous (score ≥ 0.8), auto-selects the top match; (5) inserts `document:` metadata on the transaction line (newest doc first, older docs renamed to `document2:`, `document3:`, etc.); (6) saves receipt under the appropriate account folder and removes it from WebDAV. With `--yes`: confirm all actions automatically. With `--no`: print diff only, skip writes. |
+| `beanhand associate` | `[--yes \| --no]` | `[<filename>]` | Associate one or more receipts with existing transactions. Without filenames, processes all unassociated receipts. With filenames, processes only those (they must exist). The flow: (1) LLM extracts date + amount from receipt; (2) queries Beancount for candidates within 1 day before to 45 days after receipt date; (3) LLM ranks candidates by match probability; (4) if unambiguous (score ≥ 0.8), auto-selects the top match; (5) inserts `document:` metadata on the transaction line (newest doc first, older docs renamed to `document2:`, `document3:`, etc.); (6) saves receipt under the appropriate account folder and removes it from WebDAV. With `--yes`: confirm all actions automatically. With `--no`: print diff only, skip writes. |
 
 ### Refining existing transactions
 
@@ -53,13 +53,13 @@ Rewrite an existing transaction using the documents already linked to it, to pro
 
 | Command | Flags | Arguments | Description |
 |---|---|---|---|
-| `bean-ai refine <file_path> <target>…` | `[--yes \| --no]` `[--clear \| -c]` | `<file_path> <target>…` | Target one or more transactions by file path plus one or more targets. Each target is a 1-based line number (any line *within* the transaction), an inclusive range of line numbers (A-B), or an open range running to the end of the file (A-end): every transaction that begins between both line numbers is refined (with A-end, to the last line of the file). Targets must be strictly ascending and non-overlapping (contiguous, `1-500` and `501-1000`, is fine); duplicate, intersecting, or out-of-range targets are rejected once the file's line count is known (the `end` keyword is resolved to the file's last line). The client extracts the targeted transaction block(s), reads the documents linked in their `document:` / `documentN:` metadata (client-local, resolved relative to the file's directory or the Beancount data root), and for each transaction sends it to the server as plain JSON on stdin (the command carries no positional argument) together with the account list and document images, asking the LLM for a rewritten transaction. For each candidate refinement, a colored unified diff of the whole file (reflecting all accepted changes so far) is shown, followed by an interactive prompt: `y`es keeps the refinement for that transaction (and moves on to the next one, if any), `n`o skips it (the transaction is left untouched), `p`review document opens its first linked document, `q`uit aborts the run — keeping all refinements already accepted. With `--yes`: apply all refinements without confirmation. With `--no`: do all the work and show the diff but touch no file. With `--clear` (`-c`): the flag of every accepted, changed transaction is set to the clear flag (`*`). The file is written only once, at the end, if any accepted refinement differs from the original. A target line that points at no transaction simply selects nothing (no error). Exit 0 on success, non-zero on error (missing file, invalid, descending or overlapping target, target out of range, unreadable document, LLM error, malformed LLM output). |
+| `beanhand refine <file_path> <target>…` | `[--yes \| --no]` `[--clear \| -c]` | `<file_path> <target>…` | Target one or more transactions by file path plus one or more targets. Each target is a 1-based line number (any line *within* the transaction), an inclusive range of line numbers (A-B), or an open range running to the end of the file (A-end): every transaction that begins between both line numbers is refined (with A-end, to the last line of the file). Targets must be strictly ascending and non-overlapping (contiguous, `1-500` and `501-1000`, is fine); duplicate, intersecting, or out-of-range targets are rejected once the file's line count is known (the `end` keyword is resolved to the file's last line). The client extracts the targeted transaction block(s), reads the documents linked in their `document:` / `documentN:` metadata (client-local, resolved relative to the file's directory or the Beancount data root), and for each transaction sends it to the server as plain JSON on stdin (the command carries no positional argument) together with the account list and document images, asking the LLM for a rewritten transaction. For each candidate refinement, a colored unified diff of the whole file (reflecting all accepted changes so far) is shown, followed by an interactive prompt: `y`es keeps the refinement for that transaction (and moves on to the next one, if any), `n`o skips it (the transaction is left untouched), `p`review document opens its first linked document, `q`uit aborts the run — keeping all refinements already accepted. With `--yes`: apply all refinements without confirmation. With `--no`: do all the work and show the diff but touch no file. With `--clear` (`-c`): the flag of every accepted, changed transaction is set to the clear flag (`*`). The file is written only once, at the end, if any accepted refinement differs from the original. A target line that points at no transaction simply selects nothing (no error). Exit 0 on success, non-zero on error (missing file, invalid, descending or overlapping target, target out of range, unreadable document, LLM error, malformed LLM output). |
 
 ---
 
-## bean-ai-server (server VM)
+## beanhand-server (server VM)
 
-Runs on the machine with receipts and LLM access. Most subcommands accept filenames as **hex-encoded** positional arguments (encoded/decoded by the transport layer); `beanai.Refine` is the exception — it takes no positional argument and receives its request as plain JSON on stdin.
+Runs on the machine with receipts and LLM access. Most subcommands accept filenames as **hex-encoded** positional arguments (encoded/decoded by the transport layer); `beanhand.Refine` is the exception — it takes no positional argument and receives its request as plain JSON on stdin.
 
 **Options:**
 
@@ -71,8 +71,8 @@ Runs on the machine with receipts and LLM access. Most subcommands accept filena
 
 | Command | Output on success | Error handling |
 |---|---|---|
-| `bean-ai-server beanai.ListUningested` | JSON: `{"receipts": [...], "count": N}` | Writes `"error: ..."` to stderr, exits 1 |
-| `bean-ai-server beanai.ListUnassociated` | Same as above | Same as above |
+| `beanhand-server beanhand.ListUningested` | JSON: `{"receipts": [...], "count": N}` | Writes `"error: ..."` to stderr, exits 1 |
+| `beanhand-server beanhand.ListUnassociated` | Same as above | Same as above |
 
 Lists filenames ending in `.jpg`, `.jpeg`, `.png`, or `.pdf`, sorted by modification time. Uses `receipts_ingestion_url` (uningested) or `receipts_association_url` (unassociated).
 
@@ -80,16 +80,16 @@ Lists filenames ending in `.jpg`, `.jpeg`, `.png`, or `.pdf`, sorted by modifica
 
 | Command | Arguments | Description |
 |---|---|---|
-| `bean-ai-server beanai.Fetch <hex_filename>` | hex-encoded filename | Fetch a receipt from WebDAV (tries ingestion URL first, falls back to association) and write raw bytes to stdout. |
-| `bean-ai-server beanai.Remove <hex_filename>` | hex-encoded filename | Remove a receipt file from WebDAV (ingestion URL first, then association). Exit 0 on success, 1 on failure. |
-| `bean-ai-server beanai.Process <hex_filename>` | hex-encoded filename | Process a receipt with the LLM using `RECEIPT_CONVERSION_PROMPT.md`. PDFs are page-by-page rendered to PNG (via `pymupdf`, 300 DPI fallback). Emits streaming JSONL output. |
-| `bean-ai-server beanai.HelpAssociateReceipt <hex_filename>` | hex-encoded filename | Match a receipt against candidate transactions sent via stdin as JSON. Uses `RECEIPT_INFO_PROMPT.md` then `RECEIPT_MATCH_PROMPT.md`. Writes structured match results to stdout. |
+| `beanhand-server beanhand.Fetch <hex_filename>` | hex-encoded filename | Fetch a receipt from WebDAV (tries ingestion URL first, falls back to association) and write raw bytes to stdout. |
+| `beanhand-server beanhand.Remove <hex_filename>` | hex-encoded filename | Remove a receipt file from WebDAV (ingestion URL first, then association). Exit 0 on success, 1 on failure. |
+| `beanhand-server beanhand.Process <hex_filename>` | hex-encoded filename | Process a receipt with the LLM using `RECEIPT_CONVERSION_PROMPT.md`. PDFs are page-by-page rendered to PNG (via `pymupdf`, 300 DPI fallback). Emits streaming JSONL output. |
+| `beanhand-server beanhand.HelpAssociateReceipt <hex_filename>` | hex-encoded filename | Match a receipt against candidate transactions sent via stdin as JSON. Uses `RECEIPT_INFO_PROMPT.md` then `RECEIPT_MATCH_PROMPT.md`. Writes structured match results to stdout. |
 
 ### Refining transactions
 
 | Command | Arguments | Description |
 |---|---|---|
-| `bean-ai-server beanai.Refine` | *(none)* | Refine an existing Beancount transaction using its linked documents. **No positional argument.** The request arrives on stdin as a single plain-JSON object: `{"transaction_text": ..., "accounts": [...], "documents": [{"filepath": ..., "data": <base64>}, ...]}`. Validations are fail-stop: the request must be a JSON object with a non-empty `transaction_text`; each document's extension must be one of `.jpg`, `.jpeg`, `.png`, `.pdf`. Documents are base64-decoded and turned into image parts (PDFs rendered to PNG page-by-page). Emits the same streaming JSONL output as `beanai.Process`. |
+| `beanhand-server beanhand.Refine` | *(none)* | Refine an existing Beancount transaction using its linked documents. **No positional argument.** The request arrives on stdin as a single plain-JSON object: `{"transaction_text": ..., "accounts": [...], "documents": [{"filepath": ..., "data": <base64>}, ...]}`. Validations are fail-stop: the request must be a JSON object with a non-empty `transaction_text`; each document's extension must be one of `.jpg`, `.jpeg`, `.png`, `.pdf`. Documents are base64-decoded and turned into image parts (PDFs rendered to PNG page-by-page). Emits the same streaming JSONL output as `beanhand.Process`. |
 
 ### JSONL output (Process, HelpAssociateReceipt and Refine)
 
@@ -127,7 +127,7 @@ The client then shows a diff and, on confirmation, replaces only the target tran
 When `target_vm` is set in config, the client talks to the server via qrexec:
 
 ```
-qrexec-client-vm <target_vm> beanai.<command>+<hex_arg>
+qrexec-client-vm <target_vm> beanhand.<command>+<hex_arg>
 ```
 
-When `target_vm` is `null`, the client spawns `bean-ai-server` as a local subprocess with hex-encoded arguments. This is how local testing works. The user never needs to worry about encoding or transport details.
+When `target_vm` is `null`, the client spawns `beanhand-server` as a local subprocess with hex-encoded arguments. This is how local testing works. The user never needs to worry about encoding or transport details.
