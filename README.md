@@ -4,8 +4,6 @@
 
 `bean-ai` is a command-line computer program that assists you with frequent time-consuming tasks, like creating detailed transaction from a receipt, filing receipts with existing transactions, and adding details to transactions based on receipts.  It delegates drudgery like typing or reading receipts to an LLM.  Your data can stay 100% private, if you choose to.  It's open source, free software — you can install and use it on your desktop computer for free.
 
-Bug reports, feature requests and pull requests are welcome!
-
 ## Who is this for?  Is it for *me?*
 
 * Do you dread typing detailed transactions in your ledger by hand, but you'd like them entered in detail anyway?
@@ -20,9 +18,15 @@ If you answered yes to any of these questions, then **yes, `bean-ai` is for you*
 
 ## What is it *not?*
 
-`bean-ai` is not a general accounting agent or harness.  You can't ask it open-ended questions about your ledger, nor ask it to write arbitrary transactions, or scan your ledger in general.  It's intentionally designed to help with certain (burdensome) tasks concretely, as it doesn't grant the LLM unrestricted access to your files by design; it lives in the part of the assistance spectrum between manually importing CSV files and committing your accounting data to full agentic AI.
+`bean-ai` is not a general accounting agent or harness.  It doesn't have open access to your accounting files.  You can't ask it open-ended questions about your ledger, nor ask it to write arbitrary transactions, or scan your ledger in general.
 
-## What can it do?
+### Do I need to submit my personal info to third parties?  Do I have to "run an AI" on my financial data?
+
+No.  You don't need any cloud, agents, or even a paid AI.  A local AI suffices — a modest 30B model with vision works stellarly.  That said, you can use OpenAI-compatible commercial services if you want.
+
+This program intentionally lives in the region of the assistance spectrum between "manually importing CSV files" and "committing your accounting data to full agentic AI".
+
+## How can this help me?
 
 ### Ingest receipts directly into Beancount files
 
@@ -44,34 +48,22 @@ A transaction you identify (by file name and line number — or a range of lines
 
 This works incredibly well after you've imported a bunch of transactions — with the little detail your bank gives you — and you've used `bean-ai associate` to add receipts to those transactions.  All those supermarket receipts of yours with many line items turn into rich detail in your ledger, in just a few seconds.
 
-### Simplify your workflows
+Bug reports, feature requests and pull requests are welcome!
 
-This lets you have a comprehensive AI-assisted workflow where:
+### Run through your accounting tasks real fast
+
+This tooling makes a workflow possible where:
 
 * use your your favorite importers to import structured data (CSV, Quicken or bank statements);
 * use `bean-ai associate` to add receipts you scanned to the newly-imported data, and organize them;
 * enhance the imported and now-documented transactions with lots of detail using `bean-ai refine`;
 * ingest any receipts corresponding to transactions not imported (e.g. cash) with `bean-ai ingest`.
 
-All of the above happens with very little intervention on your part — at best, you'll fix an LLM-made error here and there; in most cases all you need to do is confirm the changes that the AI offers.
+Minimal effort, maximum results — this program plus an importer ought to accomplish 95% of your accounting input into Beancount.  Everything `bean-ai` does happens with very little intervention on your part — at best, you'll fix an LLM-made error here and there; in most cases all you need to do is confirm the changes that the AI offers.
 
 All the tools in this program offer batch mode too: you can script them to run periodically, then check on your ledger once in a while to edit transactions and mark them as cleared.
 
-### Do I need to submit my personal info to third parties?  Do I have to "run an AI" on my financial data?
-
-No!
-
-This program imposes no dependency on any cloud at all.
-
-Furthermore, you do not need a harness like Codex or OpenClaw; you don't need MCP or any similar complication to use `bean-ai` either
-
-The LLM is *never* given indiscriminate / free / open / write access to your accounting data — it only ever sees the information that the current task requires, and it isn't allowed to touch anything else.
-
-You also *don't* need a frontier model for this — modest 30B parameter models do very well!
-
-That said:
-
-### What do I need in order to use this program?
+## What do I need in order to use this program?
 
 *Access to an AI:* You'll need an OpenAI-compatible LLM (private like Open-WebUI / Ollama or cloud like OpenAI) and an API key from your LLM service to be able to use this project.  Furthermore, whatever model you use needs to be capable of *vision*.  Note that, if you use a private (non-cloud) model, your Beancount and receipt data will always be 100% private.
 
