@@ -4,12 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "beanhand"
-version = "0.7.2"
+version = "0.7.3"
 license = "GPL-3.0"
 description = "AI-assisted CLI to help you work on your Beancount ledger"
 requires-python = ">=3.14"
 dependencies = ["openai>=2.0", "beancount>=3.2", "colorama>=0.4", "PyMuPDF>=1.27", "webdav4>=0.11", "httpx>=0.28", "certifi>=2025"]
 readme = "README.md"
+
+[project.urls]
+Homepage = "https://github.com/Rudd-O/beanhand"
+Repository = "https://github.com/Rudd-O/beanhand"
+Issues = "https://github.com/Rudd-O/beanhand/issues"
 
 [project.scripts]
 beanhand-server = "beanhand.server.cli:main"

@@ -4,7 +4,9 @@
 
 `beanhand` is a command-line computer program that assists you with frequent time-consuming tasks, like creating detailed transactions from receipts, filing receipts with existing transactions, and adding details to transactions based on receipts.  It delegates drudgery like typing or reading receipts to an LLM.  Your data can stay 100% private, if you choose to.  It's open source, free software — you can install and use it on your desktop computer for free.
 
-This program used to be called *Beancount AI*, but that name was neither uniquely identifying nor very good.  Beanhand is a more memorable name — a helping hand for your beans.
+*This program used to be called* Beancount AI, *but that name was neither uniquely identifying nor very good.  Beanhand is a more memorable name — a helping hand for your beans.*
+
+💡 Bug reports, feature requests and pull requests are welcome!  Use the issue tracker on Github.
 
 ## Who is this for?  Is it for *me?*
 
@@ -36,11 +38,15 @@ This program intentionally lives in the region of the assistance spectrum betwee
 
 The LLM processes your receipt to extract transaction details and convert it into a Beancount transaction.  `beanhand` uses that information to file the receipt under the appropriate account folder, and to write the newly-created transaction (complete with `document:` metadata tag linking back to the filed receipt).
 
+It takes about 30 seconds per receipt to do this job with `beanhand`.  It would take you over 2 minutes to do the same work by hand, even if you typed 100 wpm.
+
 ### Associate and organize receipts of existing Beancount transactions
 
 It can automatically associate transactions already in your Beancount files with your receipts.
 
 Each receipt is analyzed by the LLM to determine date / amount, then `beanhand` queries Beancount for matching transactions; the LLM is then directed to identify the correct transaction among the search results.  Finally, `beanhand` files the receipt appropriately, then adds the `document:` tag to the identified transaction, pointing to the filed receipt.
+
+It takes about 20 seconds per receipt to analyze the document, spot the matching transaction in your ledger, move the document to its right destination folder and give it an appropriate name.  That used to take me over 3 minutes per receipt.
 
 ### Refine existing transactions that have documents
 
@@ -48,9 +54,9 @@ It can even help you refine transactions down to the line item.
 
 A transaction you identify (by file name and line number — or a range of lines covering several transactions) will be submitted to the LLM, along with all its associated `document:`s, with instructions to enhance the transaction with all the factual detail present in the documents.  `beanhand` then uses the response of the LLM to rewrite *only* that transaction in your Beancount file.
 
-This works incredibly well after you've imported a bunch of transactions — with the little detail your bank gives you — and you've used `beanhand associate` to add receipts to those transactions.  All those supermarket receipts of yours with many line items turn into rich detail in your ledger, in just a few seconds.
+This works incredibly well after you've imported a bunch of transactions — with the little detail your bank gives you — and you've used `beanhand associate` to add receipts to those transactions.  All those supermarket receipts of yours with many line items turn into rich detail in your ledger, in just a few seconds.  Imagine taking a bunch of receipts you have and, after a few minutes, finally knowing exactly what categories that money was spent on.
 
-Bug reports, feature requests and pull requests are welcome!
+About 20 seconds per receipt is the speed you should expect for this task.
 
 ### Run through your accounting tasks real fast
 
@@ -71,7 +77,21 @@ All the tools in this program offer batch mode too: you can script them to run p
 
 *Receipts*: two folders where you'll drop receipts (more on that later).
 
-## Quick Start
+## How does this differ from e.g. importers?
+
+The first thing to know is that you probably will continue to use importers.  Importers excel at bulk data processing (like CSV files).  The best-in-class importers (which I still use myself!) use Bayesian categorization of transactions, which gets you to 90% of the bulk data import — you merely correct accounts.
+
+The disadvantage of relying solely on importers or scripts is that they can't actually *understand* receipts or other documents; this is a general pre-AI computer vision problem that was never solved.
+
+Therefore, relying solely on importers can't help you file a backlog of receipts, or any other kind of document, into the right transacton — you end up having to do this one by one by hand in most cases; that kind of work is slow and error prone.  Most people simply don't add receipt information to their plain text accounting as a result.
+
+Importers also cannot create detailed transactions out of receipts, which means you have to type the details yourself — and that's a lot of work.  Most people who use importers end up filing e.g. their grocery bill under a single expense account — I know I did; this burden takes away your visibility into what you're actually spending money on.
+
+The advantage of this program is that it automates all of that work.  Not only will you finish your accounting faster; you will also have more accurate information as a direct result.
+
+The main disadvantage of *this* program?  It requires an LLM.
+
+## Quick start
 
 **Dependencies**: You will need `xdg-open` from the `xdg-utils` package installed.  This is used when the program offers you to preview a receipt alongside a new or edited transaction.
 
