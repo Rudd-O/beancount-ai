@@ -1,5 +1,6 @@
 import json
 import os
+import warnings
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -150,6 +151,11 @@ class Configuration:
         if env_cfg:
             return Path(env_cfg)
         if os.path.exists(CONF_FALLBACK) and not os.path.exists(CONF_DEFAULT):
+            warnings.warn(
+                f"You are using fallback configuration file {CONF_FALLBACK}."
+                "  Fallback support will be removed in the future."
+                "  The new default configuration file lives at {CONF_DEFAULT}."
+            )
             return CONF_FALLBACK
         return CONF_DEFAULT
 

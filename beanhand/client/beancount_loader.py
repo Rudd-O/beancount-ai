@@ -75,7 +75,12 @@ def _validate_beancount_metadata(meta: dict[str, Any], account: str) -> None:
         ``"yes"`` or ``"recursively"``; or
       - ``beanhand-rules`` is present and is not a string.
     """
-    for key in ("beanhand-include", "beanhand-exclude"):
+    for key in (
+        "beanhand-include",
+        "beanhand-exclude",
+        "bean-ai-include",
+        "bean-ai-exclude",
+    ):
         if key in meta:
             value = meta[key]
             if not isinstance(value, str) or value not in _USE_MARKERS:
@@ -83,10 +88,20 @@ def _validate_beancount_metadata(meta: dict[str, Any], account: str) -> None:
                     f"invalid {key} value for {account}: {value!r} "
                     "(only 'yes' and 'recursively' are accepted)"
                 )
-    if "beanhand-rules" in meta and not isinstance(meta["beanhand-rules"], str):
-        raise ValueError(
-            f"beanhand-rules for {account} is not a string: {meta['beanhand-rules']!r}"
-        )
+        if "bean-ai" in key:
+            warnings.warn(
+                f"You are using deprecated metadata key {key} in your ledger."
+                "  This will be removed in the future."
+            )
+
+    for key in ("beanhand-rules", "bean-ai-rules"):
+        if key in meta and not isinstance(meta[key], str):
+            raise ValueError(f"{key} for {account} is not a string: {meta[key]!r}")
+        if "bean-ai" in key:
+            warnings.warn(
+                f"You are using deprecated metadata key {key} in your ledger."
+                "  This will be removed in the future."
+            )
 
 
 def _collect_account_state(entries: data.Directives) -> dict[str, _AccountState]:
@@ -179,15 +194,23 @@ def _included_accounts(
 
     included: set[str] = set()
     for acct in live:
-        own_inc = own_marker(acct, "beanhand-include")
-        own_exc = own_marker(acct, "beanhand-exclude")
-        raw_selected = own_inc is not None or ancestor_recursive(
-            acct, "beanhand-include"
+        own_inc = own_marker(acct, "beanhand-include") or own_marker(
+            acct, "bean-ai-include"
+        )
+        own_exc = own_marker(acct, "beanhand-exclude") or own_marker(
+            acct, "bean-ai-exclude"
+        )
+        raw_selected = (
+            own_inc is not None
+            or ancestor_recursive(acct, "beanhand-include")
+            or ancestor_recursive(acct, "bean-ai-include")
         )
         if not raw_selected:
             continue
-        raw_excluded = own_exc is not None or ancestor_recursive(
-            acct, "beanhand-exclude"
+        raw_excluded = (
+            own_exc is not None
+            or ancestor_recursive(acct, "beanhand-exclude")
+            or ancestor_recursive(acct, "bean-ai-exclude")
         )
         if raw_excluded and own_inc is None:
             continue
@@ -222,7 +245,9 @@ def load_live_accounts(main_file: str | Path, as_of: date) -> list[AccountRef]:
 
     entries, errors, _ = loader.load_file(main_file)
     if errors:
-        format_error = cast("Callable[[data.BeancountError], str]", printer.format_error)
+        format_error = cast(
+            "Callable[[data.BeancountError], str]", printer.format_error
+        )
         warnings.warn(
             f"{main_file} contains {len(errors)} errors; account derivation may not work.  Errors follow:\n\n"
             + "\n".join(format_error(e) for e in errors)
@@ -238,7 +263,7 @@ def load_live_accounts(main_file: str | Path, as_of: date) -> list[AccountRef]:
         if acct not in included or lo is None:
             continue
         n: AccountRef = {"name": acct}
-        rule = lo[2].get("beanhand-rules")
+        rule = lo[2].get("beanhand-rules", lo[2].get("bean-ai-rules"))
         if isinstance(rule, str) and rule.strip():
             n["rule"] = rule
         refs.append(n)
