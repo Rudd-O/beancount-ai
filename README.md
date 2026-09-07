@@ -1,6 +1,6 @@
-# Beancount AI: make your AI maintain your [Beancount](https://beancount.github.io/) ledger
+# Beancount AI: from receipts into [Beancount](https://beancount.github.io/) transactions, fast
 
-`bean-ai` is a command-line computer program that helps you keep up with your Beancount accounting, using (self-hosted or commercial) AI.  It assists with frequent time-consuming tasks, like creating a transaction from a receipt, filing receipts with existing transactions, and revising transactions based on receipts.  It's open source, free software — you can install and use it on your desktop computer for free.
+`bean-ai` is a command-line computer program that assists you with frequent time-consuming tasks, like creating detailed transaction from a receipt, filing receipts with existing transactions, and adding details to transactions based on receipts.  Your data can stay 100% private, if you choose to.  It's open source, free software — you can install and use it on your desktop computer for free.
 
 Bug reports, feature requests and pull requests are welcome!
 
@@ -10,6 +10,7 @@ Bug reports, feature requests and pull requests are welcome!
 * Do you have receipts available for some of your transactions?  (The more the merrier.)
 * Is importing data into your ledger (e.g. using Beangulp) not saving you as much work as you'd expected?
 * Do you have a lot of catching up to do in your accounting?
+* Do you ask yourself *how much of that supermarket bill was actually groceries rather than snacks*?
 * Are you curious about AI, but scared of unleashing a full agent on your computer, or exposing your financial data to others?
 * Is the time you can devote to your books limited?
 
@@ -50,6 +51,8 @@ This lets you have a comprehensive AI-assisted workflow where:
 
 All of the above happens with very little intervention on your part — at best, you'll fix an LLM-made error here and there; in most cases all you need to do is confirm the changes that the AI offers.
 
+All the tools in this program offer batch mode too: you can script them to run periodically, then check on your ledger once in a while to edit transactions and mark them as cleared.
+
 ### Do I need to submit my personal info to third parties?  Do I have to "run an AI" on my financial data?
 
 No!
@@ -66,15 +69,7 @@ That said:
 
 *Access to an AI:* You'll need an OpenAI-compatible LLM (private like Open-WebUI / Ollama or cloud like OpenAI) and an API key from your LLM service to be able to use this project.  Furthermore, whatever model you use needs to be capable of *vision*.  Note that, if you use a private (non-cloud) model, your Beancount and receipt data will always be 100% private.
 
-*Receipts*: two folders where you'll drop receipts:
-
-1. An uningested receipts folder; `bean-ai` can import (as transactions) and file for you.
-2. An unassociated receipts folder; `bean-ai` can look at them, decide which transaction each belongs to, and file them.
-
-Those folders can be stored:
-
-* In your computer; you manually drop files in them, or use something like Syncthing or Dropbox to feed them from your phone.
-* In a WebDAV server such as a Nextcloud instance; upload receipts on the Web or via your phone, and `bean-ai` can see them.
+*Receipts*: two folders where you'll drop receipts (more on that later).
 
 ## Quick Start
 
@@ -84,7 +79,7 @@ Those folders can be stored:
 
 **Configure** — create `~/.config/bean-ai.json` (see [Configuration](#configuration) below) for an example.  You'll need a `documents`, an `ai`, and a `beancount` section.  You also need to mark in your ledger the accounts the AI is allowed to use (see [Marking accounts](#marking-accounts-in-your-ledger)).
 
-**Kick the tires**.
+**Kick the tires**:
 
 To list the accounts you marked for `bean-ai` to know about:
 
@@ -131,11 +126,15 @@ Find a reference to all subcommands in the [Commands](docs/Commands.md) document
 ### Feeding receipts to `bean-ai`
 
 `bean-ai` can obtain receipts from **local folders on your computer**, or
-on a **WebDAV** server.  You'll set up two distinct folders:
+on a **WebDAV** server.  You'll need to configure two distinct folders:
 
-* the uningested receipts folder — everything here can be ingested by `bean-ai ingest`
-* the unassociated receipts folder — everything here can be assigned to an
-  existing transaction by `bean-ai associate`
+1. An uningested receipts folder; `bean-ai ingest` can import (as transactions) and file for you.
+2. An unassociated receipts folder; `bean-ai associate` can look at them, decide which transaction each belongs to, and file them.
+
+Those folders can be stored:
+
+* In your computer; you manually drop files in them, or use something like Syncthing or Dropbox to feed them from your phone.
+* In a WebDAV server such as a Nextcloud instance; upload receipts on the Web or via your phone, and `bean-ai` can see them.
 
 ### Batch operation
 
@@ -175,7 +174,7 @@ Configuration usually lives in a JSON file: `~/.config/bean-ai.json`
 
 Your configuration file must include three sections:
 
-* `beancount`: informs `bean-ai` of your Beancount setup
+* `beancount`: informs `bean-ai` of your Beancount setup.
 * `documents`: lets `bean-ai` know where to find your receipts.
 * `ai`: informs `bean-ai` of your OpenAI-compatible LLM service.
 
