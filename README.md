@@ -1,6 +1,8 @@
-# Beancount AI: from receipts into [Beancount](https://beancount.github.io/) transactions, fast
+# Beancount AI: from receipts into [Beancount](https://beancount.github.io/) transactions, effortlessly
 
-`bean-ai` is a command-line computer program that assists you with frequent time-consuming tasks, like creating detailed transaction from a receipt, filing receipts with existing transactions, and adding details to transactions based on receipts.  Your data can stay 100% private, if you choose to.  It's open source, free software — you can install and use it on your desktop computer for free.
+*Let the clanker think about accounting for you, so you can think of the things you care about.*
+
+`bean-ai` is a command-line computer program that assists you with frequent time-consuming tasks, like creating detailed transaction from a receipt, filing receipts with existing transactions, and adding details to transactions based on receipts.  It delegates drudgery like typing or reading receipts to an LLM.  Your data can stay 100% private, if you choose to.  It's open source, free software — you can install and use it on your desktop computer for free.
 
 Bug reports, feature requests and pull requests are welcome!
 
@@ -11,7 +13,7 @@ Bug reports, feature requests and pull requests are welcome!
 * Is importing data into your ledger (e.g. using Beangulp) not saving you as much work as you'd expected?
 * Do you have a lot of catching up to do in your accounting?
 * Do you ask yourself *how much of that supermarket bill was actually groceries rather than snacks*?
-* Are you curious about AI, but scared of unleashing a full agent on your computer, or exposing your financial data to others?
+* Are you curious about AI, but worried about unleashing a full agent on your computer, or exposing your financial data to strangers?
 * Is the time you can devote to your books limited?
 
 If you answered yes to any of these questions, then **yes, `bean-ai` is for you**.
@@ -40,11 +42,13 @@ It can even help you refine transactions down to the line item.
 
 A transaction you identify (by file name and line number — or a range of lines covering several transactions) will be submitted to the LLM, along with all its associated `document:`s, with instructions to enhance the transaction with all the factual detail present in the documents.  `bean-ai` then uses the response of the LLM to rewrite *only* that transaction in your Beancount file.
 
+This works incredibly well after you've imported a bunch of transactions — with the little detail your bank gives you — and you've used `bean-ai associate` to add receipts to those transactions.  All those supermarket receipts of yours with many line items turn into rich detail in your ledger, in just a few seconds.
+
 ### Simplify your workflows
 
 This lets you have a comprehensive AI-assisted workflow where:
 
-* use your your favorite importers to import data like bank statements;
+* use your your favorite importers to import structured data (CSV, Quicken or bank statements);
 * use `bean-ai associate` to add receipts you scanned to the newly-imported data, and organize them;
 * enhance the imported and now-documented transactions with lots of detail using `bean-ai refine`;
 * ingest any receipts corresponding to transactions not imported (e.g. cash) with `bean-ai ingest`.
@@ -57,9 +61,11 @@ All the tools in this program offer batch mode too: you can script them to run p
 
 No!
 
-This program imposes no dependency on cloud at all.
+This program imposes no dependency on any cloud at all.
 
-Furthermore, you do not need a harness like Codex or OpenClaw; you don't need MCP or any similar complication to use `bean-ai` either; the LLM is *never* given indiscriminate / free / open / write access to your accounting data — it only ever sees the information that the current task requires, and it isn't allowed to touch anything else.
+Furthermore, you do not need a harness like Codex or OpenClaw; you don't need MCP or any similar complication to use `bean-ai` either
+
+The LLM is *never* given indiscriminate / free / open / write access to your accounting data — it only ever sees the information that the current task requires, and it isn't allowed to touch anything else.
 
 You also *don't* need a frontier model for this — modest 30B parameter models do very well!
 
