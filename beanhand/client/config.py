@@ -7,6 +7,7 @@ from types import TracebackType
 from typing import IO, ClassVar
 
 CONF_DEFAULT = Path.home() / ".config" / "beanhand.json"
+CONF_FALLBACK = Path.home() / ".config" / "bean-ai.json"
 
 
 class BeancountConfiguration:
@@ -127,12 +128,15 @@ class Configuration:
             1. ``--config`` CLI argument
             2. ``BEANHAND_CONFIG`` environment variable
             3. Default ``~/.config/beanhand.json``
+            4. Fallback ``~/.config/bean-ai.json``
         """
         if override:
             return Path(override)
         env_cfg = os.environ.get("BEANHAND_CONFIG")
         if env_cfg:
             return Path(env_cfg)
+        if os.path.exists(CONF_FALLBACK) and not os.path.exists(CONF_DEFAULT):
+            return CONF_FALLBACK
         return CONF_DEFAULT
 
     @classmethod

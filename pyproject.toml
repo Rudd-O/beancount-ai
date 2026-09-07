@@ -14,6 +14,7 @@ readme = "README.md"
 [project.scripts]
 beanhand-server = "beanhand.server.cli:main"
 beanhand = "beanhand.client.cli:main"
+bh = "beanhand.client.cli:main"
 
 [tool.setuptools.package-data]
 "beanhand" = ["*.md"]

@@ -22,7 +22,8 @@ from .config import Configuration
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="beanhand-server",
-        description="qrexec RPC service for beanhand",
+        description="Backend RPC service for the beanhand CLI."
+        "  This is the program in charge of fetching documents and talking to the LLM.",
     )
     ap.add_argument(
         "--config",

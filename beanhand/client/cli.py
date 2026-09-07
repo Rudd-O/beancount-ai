@@ -25,7 +25,7 @@ from beanhand.client.config import Configuration
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="beanhand",
-        description="qrexec client for beanhand",
+        description="The Beanhand AI-powered assistant for your Beancount books.",
     )
     ap.add_argument(
         "--config",
