@@ -41,19 +41,29 @@ The `associate` subcommand is implemented but remains partially incomplete:
 Additionally:
 - **Hard-coded window** — the ±1/+45 day search window in `do_associate_one` (`client/commands/associate.py:90-93`) is not configurable. For old receipts, users must edit code or wait for a future `--candidate-days` flag.
 
-## 6. Code quality
+## 6. Client-side receipt file handling
+
+It should be possible for the client to operate on arbitrary local receipts for the most part, not just receipts known to the server in the unassociated or uningested folders.
+
+This would require some backend rewrites so the server expects the client to either specify a receipt on the server or sends the receipt contents via the protocol endpoints, as well as client rewrites to allow users to specify / load receipts locally (seamlessly if possible).
+
+It is quite awkward and unintuitive that we have the type of split between client and server today, where receipts are forcibly and only ever looked up in the server.
+
+Ultimately storage server, AI server, and client should all be distinct roles, be able to serve their respective functions independently, and be orchestrated from the client as needed.
+
+## 7. Code quality
 
 - **`beanfiles.py:classify_by_target_spans`** and friends returns lists of lists of lines which identify a transaction by a list of lines.  It would be a good idea to have an actual `TransactionText` class that contains the lines, and that can provide information about the transaction such as the date, and then callers can use an `isinstance()` check instead of checking for a boolean.  The date extraction present in `refine.py` can then fold as a method of that `TransactionText` class.
 
-## 7. General
+## 8. General
 
 | Priority | Item |
 |---|---|
+| High | Client-side receipt file handling | 
 | Medium | Code quality |
 | Medium | Beancount file edit safety — backup before edit + atomic write |
 | Medium | Un-comment / wire up the `associate` ambiguous match picker from the spec |
 | Medium | Config schema validation (missing keys, empty values) |
-| Low | Add `--dry-run` mode for all write operations (current `--no` only shows diff, it does not process) |
 | Low | Dedup check before receipt fetch |
 | Low | Retry logic — `RemoteVM.fetch_receipt()`, `RemoteVM.remove_receipt()`, and `RemoteVM.list_receipts()` (`client/server.py`) make one attempt each. A transient network failure on the receipts VM causes the entire import to fail. Add a 3-retry loop with exponential backoff using `tenacity` or similar. |
 
