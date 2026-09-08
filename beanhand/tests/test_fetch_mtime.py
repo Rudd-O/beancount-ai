@@ -16,8 +16,8 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
-from beanhand.client.server import RemoteVM, save_receipt
-from beanhand.server.commands.fetch import run as do_fetch
+from beanhand.client.server.documents import DocumentsClient, save_receipt
+from beanhand.server.documents.commands.fetch import run as do_fetch
 from beanhand.structs import FetchedReceipt
 
 # ===========================================================================
@@ -39,7 +39,7 @@ class TestServerFetchWireFormat:
         args = argparse.Namespace(filename="r.png".encode("utf-8").hex())
         with (
             mock.patch(
-                "beanhand.server.commands.fetch.make_receipt_backend",
+                "beanhand.server.documents.commands.fetch.make_receipt_backend",
                 return_value=backend,
             ),
             mock.patch.object(sys, "stdout", _FakeStdout(captured_stdout)),
@@ -96,12 +96,13 @@ class TestClientFetchParsing:
         def _fake_call(
             action: str, arg: str | None = None
         ) -> tuple[list[str], mock.MagicMock, IO[bytes], IO[bytes]]:
+            assert action == "beanhand.Fetch"
             proc = mock.MagicMock()
             proc.stdout = inner_stdout
             proc.wait.return_value = 0
             return (["cmd"], proc, mock.MagicMock(), inner_stdout)
 
-        vm = RemoteVM(None)
+        vm = DocumentsClient(None)
         with mock.patch.object(vm, "_call", side_effect=_fake_call):
             fetched = vm.fetch_receipt("r.png")
 

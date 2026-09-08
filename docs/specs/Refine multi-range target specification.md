@@ -1,6 +1,6 @@
 # Spec: Multi-range target specification for `beanhand refine`
 
-Status: in development.
+Status: implemented.
 
 Supersedes the single-range (2-arg) and single-transaction (1-arg) invocation forms described in `docs/specs/Refine existing Beancount transactions.md`.  That document's description of the refine *flow* (LLM pass, diff, prompt, write-once) remains authoritative; this spec replaces only the CLI argument grammar and the block-extraction driver.
 
@@ -32,7 +32,7 @@ Today a user who wants to fix a handful of unrelated transactions in the same fi
 New grammar (the previous 2-positional-arg form is removed, not retained as a fallback):
 
 ```
-beanhand refine <file_path> <target>+ [--yes | --no] [--clear]
+beanhand refine <file_path> <target>+ [--yes | --no | --show-affected] [--clear]
 
 <target>  ::= <line_no> | <line_no>-<line_no> | <line_no>-end
 ```
@@ -42,6 +42,7 @@ beanhand refine <file_path> <target>+ [--yes | --no] [--clear]
 - The `end` keyword means the end of the file: `<line_no>-end` resolves to the file's last line. It is a convenience for writing a range that always runs to EOF without knowing (or recomputing) the file length.
 - The parser accepts **one or more** `<target>` tokens (previously: exactly one or two line-number positionals).
 - The old `[last_line_number]` optional positional is gone; the `A-B` form replaces it.
+- The implementation also adds a `--show-affected` (`-s`) flag — member of the mutually-exclusive `--yes`/`--no`/`--show-affected` group — that prints each selected transaction block with line numbers and exits without calling the LLM or writing anything.
 
 Parsing notes:
 - argparse `nargs="+"` is used for the `<target>+` position with a `type=` callable that parses one token and returns the tuple `(start_1based, end_1based_or_None)` where `end_1based_or_None == start_1based` for single-token cases and is `None` for the `<line_no>-end` form.  The callable raises `argparse.ArgumentTypeError` (with an explanatory message) on malformed tokens.
@@ -58,9 +59,10 @@ Rules:
 2. **Strictly ascending.** The tokens, taken in the order supplied by the user, must already be sorted by start-line: for consecutive tokens `(s_k, e_k)` and `(s_{k+1}, e_{k+1})` the user must supply them such that `s_k < s_{k+1}`.  (The non-overlap rule alone already forces ascending starts *if the user happens to provide them in that order*; the explicit strict-ascending check makes the intent visible and yields a friendlier error message for e.g. `5678-9012 1234`.)
 3. **In-bounds.** Every token's `start` and `end` must satisfy `1 <= start <= end <= N` where `N` is the number of lines in the file.  This bound is checked *after* the file is read (the file may be empty, missing, etc.; the missing-file check is unchanged).
 
-Error messages:
-- Overlap / descending-order example: `Error: target ranges are not strictly ascending and non-overlapping: 1-500 400-900 (range #2 begins before range #1 ends)`.
-- Out-of-bounds example: `Error: target range 5-12 out of file bounds (file has 9 lines)`.
+Error messages (the implementation distinguishes the two order violations):
+- Descending order: `Error: target ranges are not strictly ascending and non-overlapping: range #1 (1-500) and range #2 (400-900) — a later range must begin after the earlier one`
+- Overlap / touching: `Error: target ranges are not strictly ascending and non-overlapping: range #1 (1-500) and range #2 (400-900) — ranges must not overlap`
+- Out-of-bounds: `Error: target range 5-12 out of file bounds (file has 9 lines)`
 
 The validation step is a pure function of the parsed token list and the file's line count.  It is unit-tested independently of the file-reading logic.
 
@@ -94,7 +96,7 @@ This keeps the existing guarantee: the file is reassembled by concatenating all 
 
 ## Interaction with `--yes` / `--no` / `--clear` / prompt
 
-Unchanged: `run()` still loops over the flagged blocks in file order, calls `do_refine_one` for each, and prompts the user per transaction.  The prompts, `--yes`, `--no`, `--clear`, and the single write-at-the-end semantics all remain exactly as documented in the existing spec.  The only observable difference is how many flagged transactions there are (potentially many, from many tokens), and the ordering is the file's start-line order (not the order the user typed the tokens in).
+Unchanged: `run()` still loops over the flagged blocks in file order, calls `do_refine_one` for each, and prompts the user per transaction.  The prompts, `--yes`, `--no`, `--clear`, `--show-affected`, and the single write-at-the-end semantics all remain exactly as documented in the existing spec (note: `q`/EOF exits via `sys.exit(0)` *before* that write, discarding even the refinements already accepted).  The only observable difference is how many flagged transactions there are (potentially many, from many tokens), and the ordering is the file's start-line order (not the order the user typed the tokens in).
 
 ## Exit codes & error surface
 
@@ -121,13 +123,13 @@ $ beanhand refine Documents/Accounting/00-beancount.bean 456-end
 ...refines every tx beginning on line 456 or later, in file order...
 
 $ beanhand refine Documents/Accounting/00-beancount.bean 1234 789-1012
-Error: target ranges are not strictly ascending and non-overlapping: 1234 789-1012
-       (token #2 begins before token #1 does)
+Error: target ranges are not strictly ascending and non-overlapping: range #1 (1234) and range #2 (789-1012) — a later range must begin after the earlier one
 
 $ beanhand refine Documents/Accounting/00-beancount.bean 100-end 200
-Error: target ranges are not strictly ascending and non-overlapping: 100-end 200
-       (ranges must not overlap)
+Error: target ranges are not strictly ascending and non-overlapping: range #1 (100-end) and range #2 (200) — ranges must not overlap
 ```
+
+(Note: answering `q` or reaching EOF at the per-transaction prompt exits 0 *before* the final write, so even the refinements accepted earlier in the run are discarded; only `--yes` / a full `y` to every prompt results in a written file.)
 
 ## File and function changes
 

@@ -2,12 +2,9 @@ import argparse
 import json
 import sys
 
-from beanhand.server.config import Configuration
-from beanhand.server.llm import (
-    VALID_EXTENSIONS,
-)
-from beanhand.server.storage import Category, make_receipt_backend
-from beanhand.structs import ItemListing
+from beanhand.server.documents.backends import Category, make_receipt_backend
+from beanhand.server.documents.config import Configuration
+from beanhand.structs import VALID_EXTENSIONS, ItemListing
 
 
 def do_list(

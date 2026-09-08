@@ -20,35 +20,33 @@ This feature adds a new `associate` CLI subcommand that pairs receipt files alre
 
 ### Server-side: `beanhand.HelpAssociateReceipt` (single subcommand)
 
-The server uses a **single** subcommand `beanhand.HelpAssociateReceipt` that does two LLM passes sequentially:
+The AI server uses a **single** `beanhand.HelpAssociateReceipt` subcommand (no CLI argument; the handler lives in `beanhand/server/ai/commands/associate.py`) that does two LLM passes sequentially, with the receipt relayed inline by the client:
 
-1. **Receipt info pass**: Uses `RECEIPT_INFO_PROMPT.md` with the receipt image to extract `{date, amount}`. The prompt instructs the LLM to look at both the receipt content and file name for date; if ambiguous, it omits the field.
-2. **Candidate reading**: Reads candidates JSON from **stdin** (the client writes them before the second pass).
-3. **Matching pass**: Uses `RECEIPT_MATCH_PROMPT.md` with the same receipt image + candidate list. The prompt scores candidates on exact amount match (highest weight), payee/narration keywords, and crediting account consistency. Scores: >= 0.9 is true match, 0.6–0.8 similar, < 0.4 unrelated.
-
-Candidates are passed via stdin as hex-encoded JSON (standard qrexec transport). Server reads them with `sys.stdin.read()` then calls `json.loads()`. Injection prevention is done by parsing JSON strictly (no raw text interpolation into the prompt — candidates are serialized to JSON string and inserted via `.format()` into a fixed template).
+1. **Receipt info pass**: reads the receipt from the **first** stdin line (`AssociateRequest.deserialize(sys.stdin.readline())`), and uses `RECEIPT_INFO_PROMPT.md` with the receipt image to extract `{date, amount}`. The prompt instructs the LLM to look at both the receipt content and file name for the date; if ambiguous, it omits the field. It streams the result to the client as JSONL; the client writes the candidates only after this first pass completes.
+2. **Candidate reading**: reads the candidates JSON from the **second** stdin line with `readline()` then `json.loads()`. Injection prevention: the parsed list is round-tripped through `json.dumps`/`json.loads` (normalizing escapes) before use, and the re-serialized JSON is what reaches the prompt — never raw text.
+3. **Matching pass**: uses `RECEIPT_MATCH_PROMPT.md` with the same receipt image + candidate list. The prompt scores candidates on exact amount match (highest weight), payee/narration keywords, and crediting account consistency. Scores: >= 0.9 is a true match, 0.6–0.8 similar, < 0.4 unrelated. It streams the structured match results back to the client as JSONL.
 
 ### Client-side: `beanhand associate` subcommand
 
-The client command flow (`run()`, with its inner `do_associate_one()`, in `client/commands/associate.py`):
+The client command flow (`run()`, with its inner `do_associate_one()`, in `beanhand/client/commands/associate.py`):
 
-1. Lists unassociated receipts from server (or accepts specific filenames)
-2. For each receipt, calls `vm.help_associate_receipt(receipt)` which returns a raw `(cmd, proc, stdin, stdout)`
-3. Writes candidates JSON to the server process's stdin after parsing receipt date/amount from the first LLM pass
-4. Reads match results (JSON with `matches` list and `ambiguous` flag)
-5. **Ambiguity check**: If `ambiguous=true` or `top_score < 0.8`, raises an exception and aborts (no user prompt — candidate presentation code is dead/stubbed out)
-6. Selected transaction's source file and line number are resolved from the match result
-7. Document metadata updated via `update_document_metadata()` — newest receipt path becomes `document:`, existing ones renumbered to `document2:`, `document3:`, etc.
-8. Receipt downloaded via `beanhand.Fetch` and organized into `<beancount_folder>/<account>/` with date-prefixed filename
-9. Original receipt removed from WebDAV `unassociated` folder after all writes succeed
+1. Lists unassociated receipts from the documents server (or accepts specific filenames, which must all exist).
+2. Fetches the receipt once via `documents_client.fetch_receipt(receipt)` (needed for the LLM relay and later for the organized copy).
+3. Starts the association with `ai_vm.help_associate_receipt(receipt, fetched)`, which relays the receipt inline as the **first** stdin line and returns a raw `(cmd, proc, stdin, stdout)`; the client reads the streamed first-pass result (receipt `{date, amount}`) and prints it.
+4. If a date was found, queries Beancount for candidates within -1/+45 days (`load_transaction_contexts`); a missing date is a hard error (`Date for receipt could not be deduced.`).
+5. Writes the candidates JSON as the **second** stdin line (after closing it), then reads the second-pass match results (JSON with `matches` list and `ambiguous` flag).
+6. **Ambiguity check**: if `ambiguous=true` or the top score is `< 0.8`, raises an exception and aborts (no user prompt — the ranked-list picker code is dead/stubbed out behind it).
+7. Resolves the selected transaction's source file and line number from the match result (a line-number mismatch that fits 0 or >1 transactions is an error).
+8. Reads the transaction's source file and snapshots it with `FileGuard.take`, computes a description (narration unless `EFT payment`, else payee; the receipt amount appended when present), predicts the receipt destination path, and updates document metadata via `update_document_metadata()` — newest receipt path becomes `document:`, existing ones renumbered to `document2:`, `document3:`, etc.
+9. Shows a unified diff, prompts interactively (y/n/p/q, or `--yes`/`--no`), re-verifies the content fingerprint (refusing to write if the file changed on disk), saves the (already-fetched) receipt into `<beancount_folder>/<account_with_slashes>/` with a date-prefixed filename, writes the metadata edit to the transaction file, and finally removes the original receipt from the server.
 
 ### Beancount candidate loading (`beancount_loader.py`)
 
-Uses **`beancount.loader.load_file`** (not manual parsing). The spec originally considered manual regex parsing but chose `python-beancount` instead. Key components:
+Uses **`beancount.loader.load_file`** (not manual parsing). The spec originally considered manual regex parsing but chose `python-beancount` instead. Key components (lives at `beanhand/client/beancount_loader.py`):
 
-- `load_transactions()`: Loads entries via `loader.load_file()`, filters by date range, extracts payee/narration/postings/paid amounts using attribute access.
-- `_find_paying_posting()`: Identifies the crediting (credit) posting — prefers largest negative amount across all credits, falls back to single positive expense leg or sum of multiple expense legs.
-- `load_transaction_contexts()`: Wraps `load_transactions` plus `printer.format_entry()` to get original Beancount text for each candidate (with metadata preserved). Uses `EntryPrinter.META_IGNORE` manipulation to include the `meta` field in output so filename/lineno are visible.
+- `load_transactions()`: Loads entries via `loader.load_file()`, filters transactions by date range (inclusive on both ends), and extracts payee/narration/postings/paid amounts, plus the source `filename` and `lineno` from each entry's `meta`.
+- `_find_paying_posting()`: Identifies the crediting (credit) posting — prefers the credit with the largest absolute amount, and falls back to a single positive expense leg or the sum of the positive expense legs (with a `?` / `MULTI` currency marker when they differ).
+- `load_transaction_contexts()`: Wraps `load_transactions` plus `printer.format_entry()` to get the original Beancount text of each candidate. It temporarily removes `"meta"` from `printer.EntryPrinter.META_IGNORE` so the printed entry keeps its other metadata while suppressing the internal `filename`/`lineno` field, making the candidate text clean for the LLM (the file/line are retained separately on the `CandidateContext` struct).
 
 ### Data structures
 
@@ -78,7 +76,7 @@ class CandidateContext:
     transaction_text: str   # full printer.format_entry output
 ```
 
-### Metadata insertion (`update_document_metadata` in `client/beanfiles.py:272`)
+### Metadata insertion (`update_document_metadata` in `beanhand/client/beanfiles.py:428`)
 
 - First existing doc entry (scanning from the date/payee line) is placed as `document:` (newest).
 - All existing doc entries renumbered sequentially as `document2:`, `document3:`, … (old numbering ignored — every prior doc preserved regardless of its original key name).
@@ -87,7 +85,7 @@ class CandidateContext:
 
 ### Date range
 
-Current code uses **-1 day before** to **+45 days after** receipt date (`client/commands/associate.py:90-93`). The +45 window accounts for receipts paid up to a month later (late payments, delayed entries). This differs from the spec's original plan of ±2 days.
+Current code uses **-1 day before** to **+45 days after** receipt date (`beanhand/client/commands/associate.py:100-103`). The +45 window accounts for receipts paid up to a month later (late payments, delayed entries). This differs from the spec's original plan of ±2 days.
 
 ### Ambiguity handling
 
@@ -97,7 +95,7 @@ Current behavior: **hard error** if `ambiguous=true` or `top_score < 0.8`:
 sorry, matches are ambiguous, cannot proceed; list of matches:<matches>
 ```
 
-The interactive candidate selection code (presentation + user input loop) exists in the source but is dead/stubbed out behind the exception/`return` in the ambiguity branch (`client/commands/associate.py:134-181`) — commented as "will enable it in the future."
+The interactive candidate selection code (presentation + user input loop) exists in the source but is dead/stubbed out behind the `raise Exception(...)` in the ambiguity branch (`beanhand/client/commands/associate.py:145-191`) — the un-reachable block after the exception is commented as "This is dead code for now, but we will enable it in the future."
 
 ### CLI flags
 
@@ -109,24 +107,17 @@ The interactive candidate selection code (presentation + user input loop) exists
 
 Receipt destination path uses `predict_receipt_destination_path()`: format is `<beancount_folder>/<account_with_slashes_replaced_by_>/YYYY-MM-DD.<description — original_filename>`. The receipt folder is created with `mkdir(parents=True, exist_ok=True)`. Filenames are shortened to fit filesystem name limits via `shorten_fn()`.
 
-## File additions and modifications (matches implementation now)
-
-**Files that exist:**
+## Files (matches implementation now)
 
 | File | Purpose |
 |---|---|
-| `beanhand/client/beancount_loader.py` | Loads Beancount via `beancount.loader`, extracts TransactionInfo + CandidateContext structs |
-| `beanhand/server/RECEIPT_INFO_PROMPT.md` | Slimmed-down LLM prompt for date/amount extraction (not full transaction generation) |
-| `beanhand/server/RECEIPT_MATCH_PROMPT.md` | Short LLM prompt (~20 lines) for candidate ranking/matching |
-
-**Modified files:**
-
-| File | Changes |
-|---|---|
-| `beanhand/client/commands/associate.py` | `associate` subcommand (`run()` + inner `do_associate_one()`) flow logic: candidate usage, metadata update, receipt organization |
+| `beanhand/client/beancount_loader.py` | Loads Beancount via `beancount.loader`; defines `TransactionInfo` + `CandidateContext` and `load_transactions()` / `load_transaction_contexts()` |
+| `beanhand/server/ai/RECEIPT_INFO_PROMPT.md` | Slimmed-down LLM prompt for date/amount extraction (not full transaction generation) |
+| `beanhand/server/ai/RECEIPT_MATCH_PROMPT.md` | Short LLM prompt (~20 lines) for candidate ranking/matching |
+| `beanhand/client/commands/associate.py` | `associate` subcommand (`run()` + inner `do_associate_one()`): relay, candidate usage, metadata update, receipt organization |
 | `beanhand/client/beanfiles.py` | `update_document_metadata()` (doc-metadata renumbering/insertion) used by the command |
-| `beanhand/client/beancount_loader.py` | `load_transactions()` / `load_transaction_contexts()` client-side usage |
-| `beanhand/server/commands/associate.py` | `beanhand.HelpAssociateReceipt` handler (`run()`): two LLM passes (info + match), stdin candidate reading |
+| `beanhand/client/server/ai.py` | `AIClient.help_associate_receipt()` — relays the receipt as the first stdin line and returns the proc handles |
+| `beanhand/server/ai/commands/associate.py` | `beanhand.HelpAssociateReceipt` handler (`run()`): two LLM passes (info + match), stdin candidate reading |
 
 ## Implementation order (actual, not planned)
 
@@ -135,16 +126,17 @@ The implementation was completed in this order:
 1. `RECEIPT_INFO_PROMPT.md` — extract date/amount from receipt image
 2. `RECEIPT_MATCH_PROMPT.md` — slimmed-down match prompt (reduced from ~50-100 lines to ~20 lines)
 3. `beancount_loader.py` — Beancount candidate loading (chose `beancount.loader` over manual regex)
-4. `run()` handler in `server/commands/associate.py` — single subcommand combining info + match passes
-5. `run()` / `do_associate_one()` in `client/commands/associate.py` — wiring candidates flow, metadata update, receipt organization
+4. `run()` handler in `beanhand/server/ai/commands/associate.py` — single subcommand combining info + match passes
+5. `run()` / `do_associate_one()` in `beanhand/client/commands/associate.py` — wiring the relay, candidates flow, metadata update, receipt organization
 6. Ambiguous result handling stubbed out (not yet enabled)
 
 ## Edge cases handled in code
 
-- **No date in receipt**: Error out ("Date for receipt could not be deduced") — aborts this receipt.
-- **No candidates within date range**: Produces empty matches list → LLM reports `ambiguous: true` with no valid matches. User gets the generic error message.
-- **Missing source file**: Raises Exception rather than silently failing ("Warning: Transaction source file does not exist").
-- **Line number exceeds file length**: Explicit check before update, raises Exception.
+- **No date in receipt**: `assert 0, "Date for receipt could not be deduced."` — aborts this receipt.
+- **No candidates within date range**: `load_transaction_contexts` returns an empty context list; an empty candidate array is sent, so the LLM typically reports no matches → the client prints `No valid matches found for receipt <fn>.` for that receipt.
+- **Match result resolves to no / multiple transactions**: Raises an exception (a `line_no`/`source_file` combination must match exactly one candidate).
+- **Missing source file**: Raises an exception rather than silently failing ("Warning: Transaction source file ... does not exist. Cannot update metadata.").
+- **Line number exceeds file length**: Explicit check before the update, raises an exception.
 - **Multiple credit postings**: `_find_paying_posting()` picks the one with largest absolute value.
 - **Existing `document:` tag**: All prior documents preserved and renumbered; new one becomes `document:`.
 - **Multi-line narration / special chars in payee**: Handled by `beancount.loader` parser — no manual parsing needed.

@@ -88,14 +88,16 @@ def _validate_beancount_metadata(meta: dict[str, Any], account: str) -> None:
                     f"invalid {key} value for {account}: {value!r} "
                     "(only 'yes' and 'recursively' are accepted)"
                 )
-        if "bean-ai" in key:
-            warnings.warn(
-                f"You are using deprecated metadata key {key} in your ledger."
-                "  This will be removed in the future."
-            )
+            if "bean-ai" in key:
+                warnings.warn(
+                    f"You are using deprecated metadata key {key} in your ledger."
+                    "  This will be removed in the future."
+                )
 
     for key in ("beanhand-rules", "bean-ai-rules"):
-        if key in meta and not isinstance(meta[key], str):
+        if key not in meta:
+            continue
+        if not isinstance(meta[key], str):
             raise ValueError(f"{key} for {account} is not a string: {meta[key]!r}")
         if "bean-ai" in key:
             warnings.warn(

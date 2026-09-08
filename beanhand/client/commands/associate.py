@@ -25,12 +25,15 @@ from beanhand.client.beanfiles import (
 )
 from beanhand.client.config import Configuration
 from beanhand.client.display import print_diff
-from beanhand.client.server import (
-    RemoteVM,
+from beanhand.client.server.ai import (
+    AIClient,
     demarkdownify,
+    stream_reasoning_and_capture_output,
+)
+from beanhand.client.server.documents import (
+    DocumentsClient,
     preview_receipt,
     save_receipt,
-    stream_reasoning_and_capture_output,
 )
 from beanhand.structs import load_json
 
@@ -46,8 +49,9 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
       5. If ambiguous, present ranked list to user.
       6. Organize the receipt file.
     """
-    vm = RemoteVM.from_cfg(cfg)
-    receipts = vm.list_receipts("unassociated")
+    doc_vm = DocumentsClient.from_cfg(cfg)
+    ai_vm = AIClient.from_cfg(cfg)
+    receipts = doc_vm.list_receipts("unassociated")
 
     if args.filename:
         for fn in args.filename:
@@ -63,9 +67,11 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
         return
 
     def do_associate_one(receipt: str, preview_dir: Path) -> None:  # noqa: C901
+        fetched = doc_vm.fetch_receipt(receipt)
+
         # Step 1: Process the receipt via LLM (existing flow).
         try:
-            cmd, proc, stdin, stdout = vm.help_associate_receipt(receipt)
+            cmd, proc, stdin, stdout = ai_vm.help_associate_receipt(receipt, fetched)
         except subprocess.CalledProcessError as e:
             raise Exception(f"Error processing receipt: {e}") from e
 
@@ -111,7 +117,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
             ctx.__dict__ if hasattr(ctx, "__dict__") else ctx for ctx in contexts
         ]
         # Write candidates JSON to the server.
-        candidates_raw = json.dumps(candidates_data).encode("utf-8")
+        candidates_raw = (json.dumps(candidates_data) + "\n").encode("utf-8")
         stdin.write(candidates_raw)
         stdin.flush()
         stdin.close()
@@ -294,7 +300,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
                     sys.exit(0)
 
                 if answer == "p":
-                    preview_receipt(cfg, receipt, preview_dir)
+                    preview_receipt(doc_vm, receipt, preview_dir)
                     continue  # re-prompt for the same receipt
 
                 if answer != "y":
@@ -315,8 +321,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
         except FileModifiedError as e:
             raise Exception(f"Refusing to associate: {e}") from e
 
-        # Download the receipt and save it organized.
-        fetched = vm.fetch_receipt(receipt)
+        # Save the (already-fetched) receipt organized.
         save_receipt(receipt_path, fetched)
 
         print(f"Receipt saved to {receipt_path}", file=sys.stderr)
@@ -326,7 +331,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
             f"Updated document metadata on line {line_no} of {tx_file}", file=sys.stderr
         )
 
-        vm.remove_receipt(receipt)
+        doc_vm.remove_receipt(receipt)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         preview_dir = Path(tmpdir)

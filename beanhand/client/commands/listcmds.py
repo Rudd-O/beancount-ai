@@ -1,7 +1,7 @@
 import argparse
 
 from beanhand.client.config import Configuration
-from beanhand.client.server import RemoteVM
+from beanhand.client.server.documents import DocumentsClient
 
 
 def do_list_uningested(cfg: Configuration, args: argparse.Namespace) -> None:
@@ -10,7 +10,7 @@ def do_list_uningested(cfg: Configuration, args: argparse.Namespace) -> None:
 
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
-    for fname in RemoteVM.from_cfg(cfg).list_receipts("uningested"):
+    for fname in DocumentsClient.from_cfg(cfg).list_receipts("uningested"):
         print(fname)
 
 
@@ -20,7 +20,7 @@ def do_list_unassociated(cfg: Configuration, args: argparse.Namespace) -> None:
 
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
-    for fname in RemoteVM.from_cfg(cfg).list_receipts("unassociated"):
+    for fname in DocumentsClient.from_cfg(cfg).list_receipts("unassociated"):
         print(fname)
 
 

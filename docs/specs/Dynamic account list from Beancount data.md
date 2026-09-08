@@ -86,6 +86,7 @@ In this ledger, a run on a date after all of these opens and before any close of
 - **Date rule.** An account is *live as of* the run date when, considering only its `open` and `close` events on or before the run date, the most recent such event is an `open`. (Equivalently: it has an `open` ≤ the run date, and it has no `close` ≤ the run date that post-dates its latest such `open`.) An account whose `open` is in the future, or that is `close`d on or before the run date, is excluded.
 - `beanhand-include` and `beanhand-exclude` **do not inherit** unless their value is `recursively`: the marker must be present on the account's own most recent `open`, or on a proper ancestor's (which is what `recursively` means). A *closed* ancestor **can** carry a `recursively` marker down to its live descendants — closing a parent does not revoke the policy for children that remain open (see Edge cases).
 - `beanhand-rules` **never inherits**, regardless of markers.
+- **Deprecated `bean-ai-*` aliases.** For one release the pre-rename keys `bean-ai-include`, `bean-ai-exclude`, and `bean-ai-rules` are still accepted and behave identically (and may be combined with the `beanhand-*` keys), but they emit a deprecation warning to stderr on load; rename them to the `beanhand-*` forms. Support is scheduled for removal.
 
 ## Deriving the account list
 
@@ -123,6 +124,7 @@ The account list is needed wherever a transaction is produced with the LLM:
 - `beanhand process <file>` (`beanhand.Process`) — as of today.
 - `beanhand ingest` / `beanhand import <filename>` (the import path behind both) — as of today.
 - `beanhand refine <file> <targets>…` (`beanhand.Refine`) — as of the refined transaction's own date.
+- `beanhand list-accounts [date]` — read-only; as of the supplied date (default today).
 
 The `associate` flow does **not** offer an account list to the LLM (its prompts use receipt info and candidate transactions), so it is unaffected.
 
@@ -142,13 +144,13 @@ The account list is a JSON array of objects. Each object has a required `name` (
 
 ### `beanhand.Process`
 
-- **Request (stdin):** the account list above, as a JSON array — replacing today's JSON array of plain strings. The command's single positional argument (the hex-encoded filename) is unchanged.
-- **Server handler:** parses stdin as a JSON array of objects and validates the shape: the top level must be an array; each element must be an object; each element must carry a non-empty string `name` with no newlines and, optionally, a string `rule` with no newlines, and no other keys. Any other shape (a bare string element, a missing/empty/non-string `name`, a non-string `rule`, an unknown extra key, a non-array top level) is a fail-stop: `error: invalid account list input: <why>` on stderr and exit 1. There is no line splitting, no first-line taking, and no comment stripping — the input is fully typed and validated by JSON type, not by text.
+- **Request (stdin):** the whole request is a single plain-JSON object `{"accounts": <the list above>, "receipt": {"filename": ..., "content": <base64>}}`; the account list is the `accounts` field (no longer a lone array, and no hex-encoded filename argument — the receipt travels inline in the same object).
+- **Server handler:** deserializes the request and validates the `accounts` field's shape via `check_account_refs`: the top level must be an array; each element must be an object; each element must carry a non-empty string `name` with no newlines and, optionally, a string `rule` with no newlines, and no other keys. Any other shape (a bare string element, a missing/empty/non-string `name`, a non-string `rule`, an unknown extra key, a non-array top level) is a fail-stop on stderr and exit 1. There is no line splitting, no first-line taking, and no comment stripping — the input is fully typed and validated by JSON type, not by text.
 
 ### `beanhand.Refine`
 
 - **Request (stdin):** the `accounts` field of the plain-JSON request payload changes type from a list of strings to the account list above. Everything else in the request (`transaction_text`, `documents`) is unchanged.
-- **Server handler:** the `accounts` field is validated exactly as in `beanhand.Process`; a missing or invalid list is a fail-stop with a clear `error:` message and exit 1.
+- **Server handler:** the `accounts` field is validated with the same `check_account_refs`; a missing or invalid list is a fail-stop (`error: Invalid request: account list missing or invalid: ...`) and exit 1.
 
 ### Serialization into the prompt
 
@@ -163,7 +165,11 @@ The two prompts are **frozen by AGENTS.md** ("do not modify without verifying ag
 
 ### Client serialization
 
-The client builds the sorted list of `{name, rule?}` objects and hands it to the transport: for `beanhand.Process` it is written to the server's stdin; for `beanhand.Refine` it becomes the `accounts` field of the request payload.
+The client builds the sorted list of `{name, rule?}` objects and hands it to the transport: for `beanhand.Process` it becomes the `accounts` field of the stdin JSON request; for `beanhand.Refine` it becomes the `accounts` field of the request payload. The same derivation also feeds `beanhand list-accounts` (see below).
+
+### `beanhand list-accounts` (read-only inspection)
+
+`beanhand list-accounts [date]` prints exactly the account list the LLM would be offered — one `name` per line, with an indented `  rule: <rule>` line beneath it when the account carries one. The optional `date` positional is the "as of" date (calendary comparison only; defaults to today). It runs the same `load_live_accounts`/`account_refs_or_die` path as the other account-touching commands, so it inherits every fail-stop (unmarked ledger, invalid marker, etc.). This is the "show me what the LLM would see" read-only command that was a follow-up to the feature; it lets users verify their ledger markers without running any LLM.
 
 ## Server-side behavior (summary)
 
@@ -299,7 +305,7 @@ The behavior above is covered by tests that pin a run date against a fixture led
 - **Backup / atomic write of Beancount files before edit** (Roadmap §3) — a separate feature; this feature only *reads* the ledger.
 - **The interactive ambiguous-match picker in `associate`** (Roadmap §5) — no change; `associate` does not send an account list to the LLM.
 - **Retrying transport calls** (Roadmap §7) — no change.
-- **A `beanhand accounts` CLI subcommand** (a read-only "show me what the LLM would see") — a natural follow-up now that the derivation exists; not part of this change.
+- **A `beanhand list-accounts` CLI subcommand** (a read-only "show me what the LLM would see") — now implemented (see "Client serialization"); an optional `date` argument scopes the derivation.
 - **Inheritance of `beanhand-rules` from ancestors** — rejected (Design decisions).
 - **A per-account `max`/priority weight or a currency constraint on the LLM** — out of scope; a future extension of the account-object shape.
 - **Any change to what the *receipt content itself* contributes to the prompt** (the image parts) — untouched.

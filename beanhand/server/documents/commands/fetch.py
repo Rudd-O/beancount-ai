@@ -3,17 +3,17 @@ import json
 import os
 import sys
 
-from beanhand.server.config import Configuration
-from beanhand.server.storage import (
+from beanhand.server.documents.backends import (
     ResourceNotFoundError,
     make_receipt_backend,
 )
+from beanhand.server.documents.config import Configuration
 
 
 def run(cfg: Configuration, args: argparse.Namespace) -> None:
     fn = os.path.basename(bytes.fromhex(args.filename).decode("utf-8"))
 
-    location = cfg.documents.uningested_location_name()
+    location = cfg.uningested_location_name()
     print(f"Fetching {fn} from {location}", file=sys.stderr)
     receipt_path = f"/{fn}"
 

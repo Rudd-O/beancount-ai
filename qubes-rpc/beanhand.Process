@@ -1,3 +1,3 @@
 #!/bin/bash
 
-exec beanhand-server beanhand.Process "$@"
+exec beanhand-ai-server beanhand.Process "$@"

@@ -1,3 +1,3 @@
 #!/bin/bash
 
-exec beanhand-server beanhand.Refine "$@"
+exec beanhand-ai-server beanhand.Refine "$@"

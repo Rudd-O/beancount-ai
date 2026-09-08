@@ -11,7 +11,7 @@ directs the software to handle:
 
 * Process the receipt to create the Beancount transaction record.
 * Identify the main payment account funding the transaction.
-* Obtain the receipt file and store it a subfolder of the Beancount folder,
+* Obtain the receipt file and store it in a subfolder of the Beancount folder,
   named after the payment account.  E.g. if the payment account is
   "Assets:Cash:CHF", then the subfolder should be Assets/Cash/CHF.
 * Add a `document:` metadata entry to the created Beancount transaction

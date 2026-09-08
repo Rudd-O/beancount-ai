@@ -2,7 +2,7 @@ include *.md
 include tox.ini
 include docs/*
 include docs/*/*
-include beanhand/server/*.md
+include beanhand/server/ai/*.md
 include qubes-rpc/*
 include beanhand/tests/*.beancount
 include Makefile

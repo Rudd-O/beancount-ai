@@ -29,7 +29,7 @@ The client behaves as it does with other account file editing commands (e.g. `as
 
 ### Server-side: `beanhand.Refine` subcommand
 
-The server's `run()` handler (in `server/commands/refine.py`) performs the refine LLM pass:
+The AI server's `run()` handler (in `beanhand/server/ai/commands/refine.py`) performs the refine LLM pass:
 
 1. Reads **plain JSON** from stdin (standard qrexec transport): `transaction_text`, an `accounts` list, and a `documents` list (each with `filepath` and base64 `data`).
 2. Loads `TRANSACTION_REFINEMENT_PROMPT.md` at runtime and fills in the `{transaction_text}` and `{accounts}` placeholders; `TRANSACTION_REFINEMENT_PROMPT.md` will be very similar to `RECEIPT_CONVERSION_PROMPT.md`
@@ -50,11 +50,11 @@ beanhand refine Documents/Accounting/00-beancount.bean 42 200          # every t
 
 Each line number may point to **any line within a target transaction** (not only the date line); the helper walks back to the transaction start. The client calls `split_into_transactions_by_range(all_lines, first_line_number - 1, last_line_number - 1)` directly to extract the flagged blocks. Each flagged transaction block contains the exact raw text of the transaction (date line, indented postings, and the indented metadata block with `document:`/`documentN:` keys), including inline comments. Comment lines *above* the transaction are not part of the block — a comment preceding the date line travels in the non-transaction group that ends where the transaction starts, so the client sends only the transaction's own lines to the LLM; any comments the LLM adds to its output become part of the replacement block.
 
-The single-transaction convenience wrapper `split_at_transaction_by_line_number()` (`client/beanfiles.py:209`) delegates to `split_into_transactions_by_range()` with `end_line = start_line` and returns `(before, tx_block, after)` — that is, all lines before, inside, and after the one flagged transaction.
+The single-transaction convenience wrapper `split_at_transaction_by_line_number()` (`beanhand/client/beanfiles.py:365`) delegates to `split_into_transactions_by_range(tx_lines, line_no)` (with `end_line` left at its default, which selects only the transaction containing that line) and returns `(before, transaction, after)` — all lines before, inside, and after that one transaction. It raises `ValueError` when the line is not part of any transaction.
 
 ### Linked document discovery
 
-The client scans `tx_block` lines for document metadata keys using the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (colon directly after the key, then a quoted path — matching both Beancount's `document: "path"` and the numbered `documentN:` forms, and consistent with `update_document_metadata()` in `client/beanfiles.py:272`). All `document`, `document2`, … forms are captured. Extracted paths are client-local and resolved as relative to the folder containing the transaction file being read. Missing/unreadable files are a fail-stop error.
+The client scans `tx_block` lines for document metadata keys using the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (colon directly after the key, then a quoted path — matching both Beancount's `document: "path"` and the numbered `documentN:` forms, and consistent with `update_document_metadata()` in `beanhand/client/beanfiles.py:428`). All `document`, `document2`, … forms are captured. Extracted paths are client-local and resolved as relative to the folder containing the transaction file being read. A missing/unreadable linked file propagates its `FileNotFoundError` out of the command (no explicit handling).
 
 ### Prompt: TRANSACTION_REFINEMENT_PROMPT.md structure
 
@@ -94,7 +94,7 @@ class RefineRequestDocument(TypedDict):
 
 class RefineRequest(TypedDict):
     transaction_text: str          # existing full Beancount transaction block (exact original formatting, comments/metadata included)
-    accounts: list[str]            # account listing (read by the client from cfg.beancount.account_list_file)
+    accounts: list[AccountRef]     # ledger-derived account list (typed {name, rule?} objects; see the dynamic-account-list spec)
     documents: list[RefineRequestDocument]      # all linked documents attached to the target transaction
 ```
 
@@ -141,6 +141,7 @@ beanhand refine <file_path> <first_line_number> [last_line_number] [--yes | --no
 | `--yes` | Apply all refinements without confirmation. |
 | `--no` | Do all the work (fetch documents, call the LLM, show the diff) but do not touch any file. |
 | `--clear`, `-c` | Set the flag of every accepted, changed transaction to the clear flag (`*`) before the final write. |
+| `--show-affected`, `-s` | List (with line numbers) each transaction that would be refined, then exit — no LLM is called and nothing is written. Mutually exclusive with the `--yes`/`--no` group. |
 
 ### Exit codes
 
@@ -170,7 +171,7 @@ The client code must under no circumstances modify data other than the specific 
 
 ### Transport and input
 
-The server receives the `beanhand.Refine` subcommand via qrexec or subprocess transport, **with no CLI argument** (unlike `beanhand.Process`/`beanhand.HelpAssociateReceipt`, which pass a hex-encoded filename as an argument — the handler must therefore not reference `args.filename`). All payload data arrives on stdin as **plain JSON** (a single object — matching the transport convention where only the command argument, not stdin, is hex-encoded):
+The AI server receives the `beanhand.Refine` subcommand via qrexec or subprocess transport, **with no CLI argument** (like `beanhand.Process` and `beanhand.HelpAssociateReceipt`, which are also now argumentless and receive their input on stdin). All payload data arrives on stdin as **plain JSON** (a single object — matching the transport convention where only a command's positional argument, not stdin, is hex-encoded):
 
 ```python
 request_data = json.loads(sys.stdin.read())  # {"transaction_text": "...", "accounts": [...], "documents": [{"filepath": "...", "data": "<base64>"}, ...]}
@@ -178,7 +179,7 @@ request_data = json.loads(sys.stdin.read())  # {"transaction_text": "...", "acco
 
 ### Processing steps
 
-1. Validate input: reject if the request is not a JSON object or `transaction_text` is missing/empty (responds with stderr `error:...` + `sys.exit(1)`)
+1. Validate input (fail-stop on each, `error: ...` to stderr + exit 1): the request must be a JSON object; `transaction_text` must be a non-blank string (`error: Invalid request: missing transaction_text`); every document must carry a string `filepath` and a string `data`; `accounts` must be present and pass `check_account_refs` (`error: Invalid request: account list missing or invalid: ...`). A missing `documents` key defaults to `[]`.
 2. Extract `transaction_text`, `accounts`, and `documents` from the request
 3. For each document in `documents`:
    - Validate the extension against the supported set (`.jpg`, `.jpeg`, `.png`, `.pdf`); any other extension is skipped after emitting a warning to stderr (`warning: unsupported document format, skipping: <ext>`), and processing continues with the remaining documents
@@ -190,7 +191,7 @@ request_data = json.loads(sys.stdin.read())  # {"transaction_text": "...", "acco
 
 ## Client-side flow (`beanhand refine`)
 
-### Detailed steps in `run(cfg, args)` (`client/commands/refine.py`)
+### Detailed steps in `run(cfg, args)` (`beanhand/client/commands/refine.py`)
 
 *There used to be pseudocode here, but it's no longer necessary since this is already implemented in `beanhand/client/commands/refine.py:run()`
 
@@ -198,28 +199,28 @@ Notes on the operation of the function:
 
 - The per-transaction diff is computed against the *current* state of `blocks` (i.e., the original file plus all refinements kept so far), so consecutive prompts show the cumulative effect of the accepted changes.
 - `--clear` rewrites the transaction flag to `*` **before** the diff is computed, so the user sees the flag change in the diff they are deciding on. It is applied only when the transaction actually changed.
-- `n` skips only the current transaction and moves on to the next one; `q` (or EOF) ends the run, but the file is still written with the refinements accepted up to that point.
+- `n` skips only the current transaction and moves on to the next one. `q` (or EOF) ends the run immediately via `sys.exit(0)`, *before* the single end-of-run write, so **no changes are written at all** — any refinements accepted earlier in the run are discarded along with them (exit 0).
 
 ### Helper: `split_into_transactions_by_range(tx_lines, start_line, end_line=None)`
 
-The general-purpose building block that `split_at_transaction_by_line_number()` (in `client/beanfiles.py:209`) delegates to. It classifies a Beancount document, over a requested line range, into a list of `(is_transaction, lines)` tuples (a `True` group runs of transaction lines, a `False` group runs of everything else), preserving the original line ordering and text exactly (flattening the groups back together reproduces the input byte-for-byte).
+The general-purpose building block in `beanhand/client/beanfiles.py` (the multi-range driver `classify_by_target_spans` runs the base classifier once over the whole file and re-flags the groups; `split_at_transaction_by_line_number()` delegates to it for the single-transaction case). It classifies a Beancount document into a list of `(is_transaction, start_lineno, lines)` tuples (a `True` group is a run of transaction lines, a `False` group is a run of everything else; `start_lineno` is the zero-based start of the group), preserving the original line ordering and text exactly (flattening the groups back together reproduces the input byte-for-byte).
 
 Arguments:
 - `tx_lines` — the document as a list of lines, keeping the line endings present in the source file.
 - `start_line` — zero-based index of the first line to consider. If it points into the middle of a transaction, the helper walks *backwards* to the transaction's start line and includes that whole transaction.
 - `end_line` — zero-based index of the last line at which a transaction may *begin*. A transaction starting at or before this index is included in whole (its body may run past the index); a transaction that begins after it is not flagged. When omitted, `end_line` defaults to `start_line`, so only the single transaction containing `start_line` is flagged and later transactions are left out.
 
-It raises `ValueError` for out-of-range or inverted ranges (`start_line`/`end_line` `< 0`, `>= len(tx_lines)`, or `end_line < start_line`), or when `tx_lines` is empty. Comments (indented or not) are not treated as part of a transaction except indented comment lines that sit between the transaction's date line and its last posting — those travel with the transaction.
+Comments above or below a transaction are not treated as part of the transaction.
 
-`run()` (in `client/commands/refine.py`) calls this function directly to refine several transactions across a line range in one pass instead of wrapping a single transaction; `split_at_transaction_by_line_number()` calls it with `end_line=None` for the single-transaction case.
+`run()` (in `beanhand/client/commands/refine.py`) invokes the whole-document classifier `classify_by_target_spans(tx_lines, spans)` over the set of validated target spans to refine several transactions in one pass; `split_at_transaction_by_line_number()` uses the base helper for the single-transaction case.
 
 ### Helper: `extract_document_paths(tx_block: list[str]) -> list[str]`
 
-Scans lines of the transaction for document metadata entries matching the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (capture group 1 is the optional numeric suffix, group 2 is the quoted path). Returns the extracted paths as a deduplicated list preserving first-seen order. This matches Beancount's `document: "path"` and the numbered `documentN:` forms, and is consistent with the key form handled by `update_document_metadata()` in `client/beanfiles.py:272`.
+Scans lines of the transaction for document metadata entries matching the single canonical regex `^\s*document(\d*):\s*"([^"]+)"` (capture group 1 is the optional numeric suffix, group 2 is the quoted path). Returns the extracted paths as a deduplicated list preserving first-seen order. This matches Beancount's `document: "path"` and the numbered `documentN:` forms, and is consistent with the key form handled by `update_document_metadata()` in `beanhand/client/beanfiles.py:428`.
 
 ### Helper: `resolve_local_document_path(doc_path: str, tx_file: Path) -> Path`
 
-Resolves a `document:` value to a client-local path: the path is interpreted as relative to the folder containing the transaction file (`os.path.join(tx_file.parent, doc_path)`); an absolute path joins to itself. The caller reads the resolved path and, on `FileNotFoundError`, prints an error and exits 1.
+Resolves a `document:` value to a client-local path: the path is interpreted as relative to the folder containing the transaction file (`os.path.join(tx_file.parent, doc_path)`); an absolute path joins to itself. The caller reads the resolved path directly (`read_bytes()`); a `FileNotFoundError` is not caught and propagates out of the command.
 
 ## Edge cases handled in code
 
@@ -228,15 +229,15 @@ Resolves a `document:` value to a client-local path: the path is interpreted as 
 | Scenario | Client behavior |
 |---|---|
 | Missing file / file does not exist | Prints `Error: file not found: <path>` to stderr, exits 1 |
-| Line number out of range (first/last line number 0, or past the line count) | Prints the `ValueError` from `split_into_transactions_by_range()` (e.g. `starting line number 9 cannot be greater than the supplied number of lines 9`) to stderr, exits 1 |
-| `first_line_number` points at a line that is not within any transaction (e.g. a header comment) | `split_into_transactions_by_range()` returns blocks with nothing flagged; no transaction is refined, the file is left untouched, exit 0 |
-| LLM returns a block with no valid header or fewer than two postings | Prints `Error: LLM returned a malformed transaction ...` plus the raw output to stderr, exits 1 |
+| Target out of file bounds (a start/end past the line count, or `end` resolving beyond it) | Prints the `ValueError` from `validate_target_ranges()` (e.g. `target range 5-12 out of file bounds (file has 9 lines)`) to stderr, exits 1 before any mutation |
+| A target points at a line that is not within any transaction (e.g. a header comment) | `classify_by_target_spans()` returns blocks with nothing flagged for that span; no transaction is refined, the file is left untouched, exit 0 |
+| LLM returns a block with no valid header or fewer than two postings | Raises `Exception("Error: LLM returned a malformed transaction (no header / fewer than two postings).")`; the exception is not caught and propagates to the top level (traceback to stderr, exit 1) |
 | No linked documents in the extracted block | Not an error — `documents` is empty and the LLM works from the transaction text only |
-| Linked document does not exist / cannot be read | Prints `Error: linked document not found: <path>` to stderr, exits 1 |
+| Linked document does not exist / cannot be read | `read_bytes()` raises `FileNotFoundError`; the exception is not caught and propagates to the top level (traceback to stderr, exit 1) |
 | Server returns non-zero exit code | Raises `CalledProcessError`, which propagates as an error exit |
-| LLM output is not valid JSON, or lacks the `"transaction"` key | Prints the full raw output to stderr for debugging, exits 1 (same as `process` flow) |
+| LLM output is not valid JSON, or lacks the `"transaction"` key | `RefineResponse.deserialize` fails inside `AIClient.refine`; it raises `Exception("Error interpreting LLM response: ...")` with the full raw output attached, which propagates to the top level (traceback to stderr, exit 1) |
 | User answers `n` to a prompt | The current transaction is skipped (left untouched); the run continues with the next transaction in the range, and the file is written at the end with any earlier accepted refinements |
-| User answers `q` to a prompt, or stdin hits EOF | The run stops immediately; refinements already accepted before that point are still written to the file, exit 0 |
+| User answers `q` to a prompt, or stdin hits EOF | The run ends immediately (`sys.exit(0)`) before the end-of-run write, so **no file is written** — refinements accepted earlier in the run are discarded. Exit 0. |
 
 ### Server-side:
 
@@ -253,7 +254,7 @@ Resolves a `document:` value to a client-local path: the path is interpreted as 
 
 - Rewritten transaction is generally limited to the account listing supplied in the prompt
 - LLM cannot fetch additional receipts beyond those linked in metadata; it works only with provided documents
-- All linked documents are client-local (read from disk next to the Beancount data); if a `document:` path points to a file that is not present locally, the command fails with a clear "linked document not found" error
+- All linked documents are client-local (read from disk next to the Beancount data); if a `document:` path points to a file that is not present locally, the read raises `FileNotFoundError`, which propagates to the top level (no explicit handling)
 
 ---
 
@@ -278,24 +279,24 @@ Resolves a `document:` value to a client-local path: the path is interpreted as 
 
 | File | Purpose |
 |---|---|
-| `beanhand/server/TRANSACTION_REFINEMENT_PROMPT.md` | LLM prompt for refining transactions (preservation rules, modification instructions, output format examples) |
+| `beanhand/server/ai/TRANSACTION_REFINEMENT_PROMPT.md` | LLM prompt for refining transactions (preservation rules, modification instructions, output format examples) |
 | `beanhand/structs.py` | Shared `RefineRequest` / `RefineRequestDocument` TypedDicts used by the client to build the refine payload |
 
-### Modified files
+### Other files
 
-| File | Changes |
+| File | Role |
 |---|---|
-| `beanhand/server/commands/refine.py` | Add `run()` handler and `TRANSACTION_REFINEMENT_PROMPT_PATH` constant; register `beanhand.Refine` subcommand via `subcommand_parser()` (**with no positional argument**) and in the `dispatch` table |
-| `beanhand/client/commands/refine.py` | Add `run()` handler (runs a `do_refine_one` pass per flagged transaction: doc discovery → account-list read → plain-JSON stdin server call → validate → diff → interactive keep/skip, writing the file once at the end), helpers `validate_refined_transaction()` and `preview_local_document()`, and `subcommand_parser()` registering `beanhand refine` with argparse entries for `<file_path>`, `<first_line_number>`, `[last_line_number]` (positional) and `--yes/--no` / `--clear` |
-| `beanhand/client/beanfiles.py` | Raw-file helpers used by the command: `split_into_transactions_by_range()` (general transaction/non-transaction classifier over a line range), `split_at_transaction_by_line_number()` (thin single-transaction wrapper over it), `extract_document_paths()`, and `resolve_local_document_path()` |
-| `beanhand/client/cli.py` | Register `beanhand refine` in `build_parser()` via `commands.refine.subcommand_parser()` and `run` in the client `dispatch` dict |
+| `beanhand/server/ai/commands/refine.py` | `beanhand.Refine` handler (`run()` + `TRANSACTION_REFINEMENT_PROMPT_PATH`); registers `beanhand.Refine` (**no positional argument**) via `subcommand_parser()` and in the `dispatch` table |
+| `beanhand/client/commands/refine.py` | `run()` (a `do_refine_one` pass per flagged transaction: doc discovery → account-list read → plain-JSON stdin server call → validate → diff → interactive keep/skip, writing the file once at the end), helpers `parse_target()` / `validate_target_ranges()` / `validate_refined_transaction()` / `preview_local_document()`, and `subcommand_parser()` (`<file_path>`, `<target>+` positional, `--yes/--no/--show-affected` group and `--clear`) |
+| `beanhand/client/beanfiles.py` | Raw-file helpers used by the command: `split_into_transactions_by_range()`, `classify_by_target_spans()`, `split_at_transaction_by_line_number()`, `extract_document_paths()`, and `resolve_local_document_path()` |
+| `beanhand/client/cli.py` | Registers `beanhand refine` in `build_parser()` and `run` in the client `dispatch` dict |
 
 ### Implementation order (proposed)
 
 1. Write `TRANSACTION_REFINEMENT_PROMPT.md` — define preservation rules, modification instructions, and example rewrites first (with `{transaction_text}` and `{accounts}` placeholders, mirroring `RECEIPT_CONVERSION_PROMPT.md`)
-2. Server-side: implement the `beanhand.Refine` handler (`run()` in `server/commands/refine.py`) — read plain-JSON request from stdin, validate `transaction_text` (and each document's `filepath`/`data`), extension-check (warn + skip) + base64-decode + `file_to_image_parts()` each document, fill prompt placeholders, LLM call, stream output; register `beanhand.Refine` (no argument) in `build_parser()` and `dispatch`
-3. Client-side helpers: `split_into_transactions_by_range()` (classify a file into transaction / non-transaction groups over a line range), `extract_document_paths()` (scan tx metadata for `document:`/`documentN:`) and `resolve_local_document_path()` (resolve relative to the tx file's directory) — all in `client/beanfiles.py`
-4. Client-side `run()` wiring (`client/commands/refine.py`): file read → line-range validation → tx block extraction → per-transaction loop (doc discovery → read account list → plain-JSON stdin server call → parse + validate → reassemble + diff → interactive keep/skip) → single write at the end
+2. Server-side: implement the `beanhand.Refine` handler (`run()` in `beanhand/server/ai/commands/refine.py`) — read plain-JSON request from stdin, validate `transaction_text` (and each document's `filepath`/`data`), extension-check (warn + skip) + base64-decode + `file_to_image_parts()` each document, fill prompt placeholders, LLM call, stream output; register `beanhand.Refine` (no argument) in `build_parser()` and `dispatch`
+3. Client-side helpers: `split_into_transactions_by_range()` (classify a file into transaction / non-transaction groups over a line range), `extract_document_paths()` (scan tx metadata for `document:`/`documentN:`) and `resolve_local_document_path()` (resolve relative to the tx file's directory) — all in `beanhand/client/beanfiles.py`
+4. Client-side `run()` wiring (`beanhand/client/commands/refine.py`): file read → line-range validation → tx block extraction → per-transaction loop (doc discovery → read account list → plain-JSON stdin server call → parse + validate → reassemble + diff → interactive keep/skip) → single write at the end
 5. Client CLI arg parser entry in `build_parser()` with positional + optional args
 6. Register new subcommand in client's dispatch dict
 7. Add tests: unit tests for `extract_document_paths()` and `resolve_local_document_path()`, doctests for line-range validation, mock LLM response handling

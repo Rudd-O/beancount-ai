@@ -6,7 +6,7 @@ All commands rely on configuration parameters, documented in `README.md`.
 
 ## beanhand (client)
 
-Runs on the machine with Beancount data. Abstracts away the transport layer entirely — it talks to `beanhand-server` via qrexec or a local subprocess.
+Runs on the machine with Beancount data. Abstracts away the transport layer entirely — it talks to `beanhand-documents-server` and `beanhand-ai-server` via qrexec or local subprocesses (one per server, each of which may target a different VM).  When an AI operation needs a receipt, the client fetches it from the documents server and relays it to the AI server over the connection's standard input.
 
 ### Options
 
@@ -16,12 +16,11 @@ Runs on the machine with Beancount data. Abstracts away the transport layer enti
 
 ### List commands
 
-Print one receipt filename per line (bare filenames, no path).
-
 | Command | Description |
 |---|---|
-| `beanhand list-uningested` | Receipts not yet imported as transactions |
-| `beanhand list-unassociated` | Receipts not yet linked to an existing transaction |
+| `beanhand list-uningested` | Receipts not yet imported as transactions (one bare filename per line) |
+| `beanhand list-unassociated` | Receipts not yet linked to an existing transaction (one bare filename per line) |
+| `beanhand list-accounts [date]` | Print the accounts `beanhand` will offer the LLM (one name per line, with an indented `  rule: <rule>` line when the account carries one). Optional `date` scopes the open/closed check; defaults to today. Run `beanhand list-accounts` to sanity-check your ledger's `beanhand-include` / `beanhand-exclude` markers. No LLM is called. |
 
 ### Receipt import and ingestion
 
@@ -57,9 +56,9 @@ Rewrite an existing transaction using the documents already linked to it, to pro
 
 ---
 
-## beanhand-server (server VM)
+## beanhand-documents-server (documents VM)
 
-Runs on the machine with receipts and LLM access. Most subcommands accept filenames as **hex-encoded** positional arguments (encoded/decoded by the transport layer); `beanhand.Refine` is the exception — it takes no positional argument and receives its request as plain JSON on stdin.
+Runs on the machine that has the receipts. It needs only the `documents` section of the config. The client's receipt operations (list, fetch, remove) are relayed to the subcommands below.
 
 **Options:**
 
@@ -71,25 +70,37 @@ Runs on the machine with receipts and LLM access. Most subcommands accept filena
 
 | Command | Output on success | Error handling |
 |---|---|---|
-| `beanhand-server beanhand.ListUningested` | JSON: `{"receipts": [...], "count": N}` | Writes `"error: ..."` to stderr, exits 1 |
-| `beanhand-server beanhand.ListUnassociated` | Same as above | Same as above |
+| `beanhand-documents-server beanhand.ListUningested` | JSON: `{"receipts": [...], "count": N}` | Writes `"error: ..."` to stderr, exits 1 |
+| `beanhand-documents-server beanhand.ListUnassociated` | Same as above | Same as above |
 
-Lists filenames ending in `.jpg`, `.jpeg`, `.png`, or `.pdf`, sorted by modification time. Uses `receipts_ingestion_url` (uningested) or `receipts_association_url` (unassociated).
+Lists filenames ending in `.jpg`, `.jpeg`, `.png`, or `.pdf`, sorted by modification time. Uses the uningested or unassociated location per the configured backend.
 
 ### Receipt operations
 
 | Command | Arguments | Description |
 |---|---|---|
-| `beanhand-server beanhand.Fetch <hex_filename>` | hex-encoded filename | Fetch a receipt from WebDAV (tries ingestion URL first, falls back to association) and write raw bytes to stdout. |
-| `beanhand-server beanhand.Remove <hex_filename>` | hex-encoded filename | Remove a receipt file from WebDAV (ingestion URL first, then association). Exit 0 on success, 1 on failure. |
-| `beanhand-server beanhand.Process <hex_filename>` | hex-encoded filename | Process a receipt with the LLM using `RECEIPT_CONVERSION_PROMPT.md`. PDFs are page-by-page rendered to PNG (via `pymupdf`, 300 DPI fallback). Emits streaming JSONL output. |
-| `beanhand-server beanhand.HelpAssociateReceipt <hex_filename>` | hex-encoded filename | Match a receipt against candidate transactions sent via stdin as JSON. Uses `RECEIPT_INFO_PROMPT.md` then `RECEIPT_MATCH_PROMPT.md`. Writes structured match results to stdout. |
+| `beanhand-documents-server beanhand.Fetch <hex_filename>` | hex-encoded filename | Fetch a receipt (tries the uningested location first, falls back to unassociated) and writes one JSON line `{"timestamp": <float>}` followed by the raw bytes to stdout. |
+| `beanhand-documents-server beanhand.Remove <hex_filename>` | hex-encoded filename | Remove a receipt file (uningested first, then unassociated). Exit 0 on success, 1 on failure. |
 
-### Refining transactions
+---
 
-| Command | Arguments | Description |
+## beanhand-ai-server (AI VM)
+
+Runs on the machine with access to the LLM API. It needs only the `ai` section of the config and never touches the receipt storage: when an operation requires a receipt, the client fetches it from the documents server and relays it inline over stdin (base64-encoded). All three subcommands take no positional argument; their input arrives on stdin.
+
+**Options:**
+
+| Flag | Description |
+|---|---|
+| `--config, -c <path>` | Override config file path |
+
+### Receipt processing
+
+| Command | Stdin | Description |
 |---|---|---|
-| `beanhand-server beanhand.Refine` | *(none)* | Refine an existing Beancount transaction using its linked documents. **No positional argument.** The request arrives on stdin as a single plain-JSON object: `{"transaction_text": ..., "accounts": [...], "documents": [{"filepath": ..., "data": <base64>}, ...]}`. Validations are fail-stop: the request must be a JSON object with a non-empty `transaction_text`; each document's extension must be one of `.jpg`, `.jpeg`, `.png`, `.pdf`. Documents are base64-decoded and turned into image parts (PDFs rendered to PNG page-by-page). Emits the same streaming JSONL output as `beanhand.Process`. |
+| `beanhand-ai-server beanhand.Process` | single JSON object: `{"accounts": [...], "receipt": {"filename": ..., "content": <base64>}}` | Process a receipt with the LLM using `RECEIPT_CONVERSION_PROMPT.md`. PDFs are page-by-page rendered to PNG (via `pymupdf`, 300 DPI fallback). Emits streaming JSONL output. |
+| `beanhand-ai-server beanhand.HelpAssociateReceipt` | first line: JSON object `{"receipt": {"filename": ..., "content": <base64>}}`, then: a JSON array of candidate transactions | Match a receipt against candidate transactions. Uses `RECEIPT_INFO_PROMPT.md` first (streams receipt date / amount to the client), waits for the candidates to arrive, then `RECEIPT_MATCH_PROMPT.md` (streams structured match results). |
+| `beanhand-ai-server beanhand.Refine` | single JSON object: `{"transaction_text": ..., "accounts": [...], "documents": [{"filepath": ..., "data": <base64>}, ...]}` | Refine an existing Beancount transaction using its linked documents. Validations are fail-stop: the request must be a JSON object with a non-empty `transaction_text`; each document's extension must be one of `.jpg`, `.jpeg`, `.png`, `.pdf`. Documents are base64-decoded and turned into image parts (PDFs rendered to PNG page-by-page). Emits the same streaming JSONL output as `beanhand.Process`. |
 
 ### JSONL output (Process, HelpAssociateReceipt and Refine)
 
@@ -103,12 +114,11 @@ Each line is flushed immediately. Every 10 chunks the buffer is forcibly flushed
 
 ### HelpAssociateReceipt flow
 
-1. Reads receipt from `receipts_association_url` via WebDAV
-2. Converts PDF → PNG pages (or base64-encodes images)
-3. Emits receipt info JSONL (`RECEIPT_INFO_PROMPT.md`)
-4. Reads candidate transactions JSON from stdin
-5. Invokes LLM with image + candidates (`RECEIPT_MATCH_PROMPT.md`)
-6. Writes ranked match results to stdout as JSONL
+1. Reads the receipt (inlined on the first stdin line) and converts PDF → PNG pages (or base64-encodes images)
+2. Emits receipt info JSONL (`RECEIPT_INFO_PROMPT.md`)
+3. Reads the candidate transactions JSON from the second stdin line (the client writes it after querying Beancount with the receipt's date)
+4. Invokes LLM with image + candidates (`RECEIPT_MATCH_PROMPT.md`)
+5. Writes ranked match results to stdout as JSONL
 
 ### Refine flow
 
@@ -124,10 +134,12 @@ The client then shows a diff and, on confirmation, replaces only the target tran
 
 ## Transport layer
 
-When `target_vm` is set in config, the client talks to the server via qrexec:
+The client talks to two separate server programs, each addressed by its own role section in the config: `documents` (for `beanhand-documents-server`) and `ai` (for `beanhand-ai-server`). A section that carries a `vm` key (a lone `vm`, or an explicit `"backend": "qubes"` alongside `vm`) names a Qubes VM; the two sections may name two different VMs.
+
+When a section names a VM, the client talks to that server via qrexec:
 
 ```
-qrexec-client-vm <target_vm> beanhand.<command>+<hex_arg>
+qrexec-client-vm <target_vm> beanhand.<command>[+<hex_arg>]
 ```
 
-When `target_vm` is `null`, the client spawns `beanhand-server` as a local subprocess with hex-encoded arguments. This is how local testing works. The user never needs to worry about encoding or transport details.
+When a section has no `vm` key, the client spawns the matching server program as a local subprocess (arguments hex-encoded exactly as for qrexec). This is how local testing works. The user never needs to worry about encoding or transport details.

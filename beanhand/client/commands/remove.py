@@ -1,7 +1,7 @@
 import argparse
 
 from beanhand.client.config import Configuration
-from beanhand.client.server import RemoteVM
+from beanhand.client.server.documents import DocumentsClient
 
 
 def run(cfg: Configuration, args: argparse.Namespace) -> None:
@@ -10,7 +10,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
 
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
-    RemoteVM.from_cfg(cfg).remove_receipt(args.filename)
+    DocumentsClient.from_cfg(cfg).remove_receipt(args.filename)
 
 
 def subcommand_parser(

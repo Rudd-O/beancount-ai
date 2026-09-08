@@ -443,7 +443,11 @@ Method split by role (signatures per the two subsections above):
   - `help_associate_receipt(receipt: ReceiptPayload)` — returns the raw `(cmd, proc,
     stdin, stdout)`; the caller writes the receipt message first, then the candidates
     message (mirroring today's candidates-write).
-  - `refine()` — unchanged.
+  - `refine(req: RefineRequest)` — full round-trip: writes the `RefineRequest`
+    to stdin, streams the LLM response back, and returns the deserialized
+    `RefineResponse` (mirrors `process_receipt`).  (Replaces the old
+    argumentless `refine()` that returned raw `(cmd, proc, stdin, stdout)`
+    and left the request-write / response-parse with the caller.)
 
 The local-subprocess fallback in `RemoteVM._call` changes only in the binary it spawns:
 `beanhand-documents-server` for `DocumentsBackend(None)` and `beanhand-ai-server` for

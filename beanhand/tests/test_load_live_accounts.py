@@ -436,7 +436,11 @@ class TestAccountsForPrompt:
 def _write_client_config(
     tmp_path: pathlib.Path, bean_section: dict[str, Any]
 ) -> pathlib.Path:
-    cfg: dict[str, Any] = {"target_vm": None, "beancount": bean_section}
+    cfg: dict[str, Any] = {
+        "documents": {},
+        "ai": {},
+        "beancount": bean_section,
+    }
     fp = tmp_path / "beanhand.json"
     fp.write_text(json.dumps(cfg))
     return fp
@@ -465,6 +469,119 @@ class TestConfigurationLoadLegacyKey:
         fp = _write_client_config(tmp_path, {"main_file": str(main)})
         cfg = Configuration.load(str(fp))
         assert cfg.beancount.main_file == main
+        cfg.beancount.unlock()
+
+
+# ===========================================================================
+# Configuration.load() server-target keys (split into two servers)
+# ===========================================================================
+
+
+class TestConfigurationLoadServerTargets:
+    @pytest.fixture(autouse=True)
+    def _fresh_instance(self) -> Generator[None, None, None]:
+        with mock.patch.object(Configuration, "instance", None):
+            yield
+
+    def _write_cfg(
+        self, tmp_path: pathlib.Path, sections: dict[str, Any]
+    ) -> pathlib.Path:
+        main = _write_ledger(tmp_path, "2020-01-01 open Expenses:Food\n")
+        cfg: dict[str, Any] = {
+            "documents": sections.get("documents", {}),
+            "ai": sections.get("ai", {}),
+            "beancount": {"main_file": str(main)},
+        }
+        fp = tmp_path / "beanhand.json"
+        fp.write_text(json.dumps(cfg))
+        return fp
+
+    def _set_section(self, fp: pathlib.Path, sect: str, section: Any) -> None:
+        data = json.loads(fp.read_text())
+        data[sect] = section
+        fp.write_text(json.dumps(data))
+
+    def test_loads_default_targets(self, tmp_path: pathlib.Path) -> None:
+        cfg = Configuration.load(str(self._write_cfg(tmp_path, {})))
+        assert cfg.documents_target_vm is None
+        assert cfg.ai_target_vm is None
+        cfg.beancount.unlock()
+
+    def test_loads_vm_names(self, tmp_path: pathlib.Path) -> None:
+        cfg = Configuration.load(
+            str(self._write_cfg(tmp_path, {"documents": {"vm": "doc-vm"}}))
+        )
+        assert cfg.documents_target_vm == "doc-vm"
+        cfg.beancount.unlock()
+        # Fresh instance so the second load takes effect.
+        with mock.patch.object(Configuration, "instance", None):
+            cfg2 = Configuration.load(
+                str(self._write_cfg(tmp_path, {"ai": {"vm": "ai-vm"}}))
+            )
+        assert cfg2.ai_target_vm == "ai-vm"
+        cfg2.beancount.unlock()
+
+    def test_loads_explicit_qubes_backend(self, tmp_path: pathlib.Path) -> None:
+        cfg = Configuration.load(
+            str(
+                self._write_cfg(
+                    tmp_path,
+                    {
+                        "documents": {
+                            "backend": "qubes",
+                            "vm": "doc-vm",
+                        },
+                        "ai": {"backend": "qubes", "vm": "ai-vm"},
+                    },
+                )
+            )
+        )
+        assert cfg.documents_target_vm == "doc-vm"
+        assert cfg.ai_target_vm == "ai-vm"
+        cfg.beancount.unlock()
+
+    def test_missing_documents_section_raises(self, tmp_path: pathlib.Path) -> None:
+        fp = self._write_cfg(tmp_path, {})
+        data = json.loads(fp.read_text())
+        del data["documents"]
+        fp.write_text(json.dumps(data))
+        with pytest.raises(ValueError, match="include a documents section"):
+            Configuration.load(str(fp))
+
+    def test_missing_ai_section_raises(self, tmp_path: pathlib.Path) -> None:
+        fp = self._write_cfg(tmp_path, {})
+        data = json.loads(fp.read_text())
+        del data["ai"]
+        fp.write_text(json.dumps(data))
+        with pytest.raises(ValueError, match="include a ai section"):
+            Configuration.load(str(fp))
+
+    def test_section_must_be_a_dictionary(self, tmp_path: pathlib.Path) -> None:
+        fp = self._write_cfg(tmp_path, {})
+        self._set_section(fp, "documents", "not-a-dict")
+        with pytest.raises(ValueError, match="must be a dictionary"):
+            Configuration.load(str(fp))
+
+    def test_vm_must_be_non_empty_string(self, tmp_path: pathlib.Path) -> None:
+        fp = self._write_cfg(tmp_path, {})
+        self._set_section(fp, "documents", {"vm": 42})
+        with pytest.raises(ValueError, match="must be a VM name"):
+            Configuration.load(str(fp))
+
+    def test_qubes_section_rejects_extra_keys(self, tmp_path: pathlib.Path) -> None:
+        # A qubes section may carry only ``vm`` (and optionally ``backend``);
+        # storage-backend keys are a server-side detail and are not legal here.
+        fp = self._write_cfg(tmp_path, {"documents": {"vm": "doc-vm"}})
+        self._set_section(fp, "documents", {"vm": "doc-vm", "base_url": "https://x"})
+        with pytest.raises(ValueError, match="may not be specified"):
+            Configuration.load(str(fp))
+
+    def test_co_located_section_ignores_extra_keys(self, tmp_path: pathlib.Path) -> None:
+        # Without a qubes backend, a section may carry extra (ignored) keys.
+        cfg = Configuration.load(
+            str(self._write_cfg(tmp_path, {"documents": {"note": "kept local"}}))
+        )
+        assert cfg.documents_target_vm is None
         cfg.beancount.unlock()
 
 

@@ -1,5 +1,4 @@
 import argparse
-import subprocess
 import sys
 from datetime import date
 
@@ -7,9 +6,8 @@ from beanhand.client.beancount_loader import (
     account_refs_or_die,
 )
 from beanhand.client.config import Configuration
-from beanhand.client.server import (
-    RemoteVM,
-)
+from beanhand.client.server.ai import AIClient
+from beanhand.client.server.documents import DocumentsClient
 
 
 def run(cfg: Configuration, args: argparse.Namespace) -> None:
@@ -19,14 +17,20 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
     try:
-        llm_output, account = RemoteVM.from_cfg(cfg).process_receipt(
-            args.filename, account_refs_or_die(cfg.beancount.main_file, date.today())
+        ai_vm = AIClient.from_cfg(cfg)
+        documents_vm = DocumentsClient.from_cfg(cfg)
+        fetched = documents_vm.fetch_receipt(args.filename)
+        resp = ai_vm.process_receipt(
+            args.filename,
+            fetched,
+            account_refs_or_die(cfg.beancount.main_file, date.today()),
         )
-    except subprocess.CalledProcessError as e:
-        sys.exit(e.returncode)
+    except Exception as e:
+        print(e, file=sys.stderr)
+        sys.exit(1)
 
-    print(llm_output)
-    print(f"Main account: {account}")
+    print(resp.transaction)
+    print(f"Main account: {resp.payment_account}")
 
 
 def subcommand_parser(

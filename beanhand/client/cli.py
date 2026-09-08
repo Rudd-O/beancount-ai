@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""beanhand — CLI wrapper that talks to beanhand-server on `pim` via qrexec.
+"""beanhand — CLI wrapper that talks to beanhand-documents-server and
+beanhand-ai-server, either locally or via qrexec.
 
 Config is read from ~/.config/beanhand.json.
 """

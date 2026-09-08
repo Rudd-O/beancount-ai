@@ -17,7 +17,7 @@ Returns a list of triples:
 - **DPI used** — the effective dots per inch applied during rendering (float).
 - **PNG bytes** — raw PNG-encoded pixel data for that page.
 
-The returned sequence is sorted by page number ascending. When a page contains multiple embedded images, the highest DPI among them is used for that page's render. Pages where no embedded image is detected use fallback rules described below.
+The returned sequence is sorted by page number ascending. When a page contains multiple embedded images, the highest DPI among them is used for that page's render. Pages where no embedded image is detected use the fallback rules described below. Pages whose computed width-in-inches is non-positive are skipped entirely (they produce no output tuple), which can make the number of returned images smaller than the number of pages.
 
 ## DPI computation per page
 
@@ -78,10 +78,10 @@ The gate fires immediately after opening the document, before any page is render
 
 `render_pdf_pages_to_png()` does **not** suppress exceptions it catches internally except by design:
 
-- `pymupdf.open()` may raise for invalid/corrupt PDF data — these propagate to the caller (handled in `file_to_image_parts()` in `server/llm.py:61-64` as a stderr `error: ...` message and `sys.exit(1)`).
+- `pymupdf.open()` may raise for invalid/corrupt PDF data — these propagate to the caller (handled in `file_to_image_parts()` in `beanhand/server/llm.py` as a stderr `error PDF rendering failed: <e>` message and `sys.exit(1)`).
 - `ValueError` from the `max_pages` gate also propagates; it is not caught inside this function.
 
-The caller `file_to_image_parts()` in `server/llm.py:47-64` wraps all PDF page rendering in a `try/except Exception` block that catches errors, emits a stderr error message, and exits with code 1.
+The caller `file_to_image_parts(fn, raw)` in `beanhand/server/llm.py` (the PDF branch runs `render_pdf_pages_to_png`) wraps all PDF page rendering in a `try/except Exception` block that catches errors, emits a stderr error message, and exits with code 1. It also prints per-page `Page <n>: <bytes> bytes @ <dpi> DPI` progress lines to stderr.
 
 ## Constants
 

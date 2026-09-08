@@ -17,7 +17,8 @@ Repository = "https://github.com/Rudd-O/beanhand"
 Issues = "https://github.com/Rudd-O/beanhand/issues"
 
 [project.scripts]
-beanhand-server = "beanhand.server.cli:main"
+beanhand-documents-server = "beanhand.server.documents.cli:main"
+beanhand-ai-server = "beanhand.server.ai.cli:main"
 beanhand = "beanhand.client.cli:main"
 bh = "beanhand.client.cli:main"
 

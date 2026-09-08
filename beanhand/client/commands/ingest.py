@@ -10,8 +10,11 @@ from beanhand.client.commands import remove
 from beanhand.client.commands.importcmd import ImportResult
 from beanhand.client.config import Configuration
 from beanhand.client.display import print_diff
-from beanhand.client.server import (
-    RemoteVM,
+from beanhand.client.server.ai import (
+    AIClient,
+)
+from beanhand.client.server.documents import (
+    DocumentsClient,
     preview_receipt,
 )
 
@@ -24,7 +27,8 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
 
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
-    vm = RemoteVM.from_cfg(cfg)
+    vm = DocumentsClient.from_cfg(cfg)
+    ai_vm = AIClient.from_cfg(cfg)
     receipts = vm.list_receipts("uningested")
 
     if args.filename:
@@ -43,7 +47,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
     def do_ingest_one(receipt: str, preview_dir: Path) -> None:  # noqa: C901
         # Attempt the import.
         try:
-            imp = ImportResult(vm, cfg.beancount, receipt)
+            imp = ImportResult(vm, ai_vm, cfg.beancount, receipt)
         except Exception as e:
             raise Exception(f"Import of {receipt} failed: {e}") from e
 
@@ -76,7 +80,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
                     sys.exit(0)
 
                 if answer == "p":
-                    preview_receipt(cfg, receipt, preview_dir)
+                    preview_receipt(vm, receipt, preview_dir)
                     continue  # re-prompt for the same receipt
 
                 if answer == "y":

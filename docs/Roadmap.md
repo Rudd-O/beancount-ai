@@ -14,7 +14,7 @@ Generated from code review of all Python files under `beanhand`.
 
 ## 2. Configuration robustness
 
-- **Schema validation** — client `Configuration.load()` (`client/config.py:72`) and server `Configuration.load()` (`server/config.py:96`) read arbitrary keys via `json.load(fh)` and access them by bare dict indexing. A typo or missing field silently produces a `KeyError` at runtime. Add either a pydantic model or explicit key sets.
+- **Schema validation** — the three `Configuration.load()` implementations (client `client/config.py`, documents server `server/documents/config.py`, and AI server `server/ai/config.py`) read arbitrary keys via `json.load(fh)` and access them by bare dict indexing. A typo or missing field silently produces a `KeyError` at runtime. Add either a pydantic model or explicit key sets.
 
 ## 3. Transaction safety
 
@@ -45,12 +45,6 @@ Additionally:
 
 It should be possible for the client to operate on arbitrary local receipts for the most part, not just receipts known to the server in the unassociated or uningested folders.
 
-This would require some backend rewrites so the server expects the client to either specify a receipt on the server or sends the receipt contents via the protocol endpoints, as well as client rewrites to allow users to specify / load receipts locally (seamlessly if possible).
-
-It is quite awkward and unintuitive that we have the type of split between client and server today, where receipts are forcibly and only ever looked up in the server.
-
-Ultimately storage server, AI server, and client should all be distinct roles, be able to serve their respective functions independently, and be orchestrated from the client as needed.
-
 ## 7. Code quality
 
 - **`beanfiles.py:classify_by_target_spans`** and friends returns lists of lists of lines which identify a transaction by a list of lines.  It would be a good idea to have an actual `TransactionText` class that contains the lines, and that can provide information about the transaction such as the date, and then callers can use an `isinstance()` check instead of checking for a boolean.  The date extraction present in `refine.py` can then fold as a method of that `TransactionText` class.
@@ -65,7 +59,7 @@ Ultimately storage server, AI server, and client should all be distinct roles, b
 | Medium | Un-comment / wire up the `associate` ambiguous match picker from the spec |
 | Medium | Config schema validation (missing keys, empty values) |
 | Low | Dedup check before receipt fetch |
-| Low | Retry logic — `RemoteVM.fetch_receipt()`, `RemoteVM.remove_receipt()`, and `RemoteVM.list_receipts()` (`client/server.py`) make one attempt each. A transient network failure on the receipts VM causes the entire import to fail. Add a 3-retry loop with exponential backoff using `tenacity` or similar. |
+| Low | Retry logic — `DocumentsClient.fetch_receipt()`, `DocumentsClient.remove_receipt()`, and `DocumentsClient.list_receipts()` (`client/server/documents.py`) make one attempt each. A transient network failure on the receipts VM causes the entire import to fail. Add a 3-retry loop with exponential backoff using `tenacity` or similar. |
 
 ## Nonissues
 
@@ -73,7 +67,7 @@ This is a list of things we will not fix.  Do not remove anything from this list
 
 - **Reset mechanism for the config singleton** — `Configuration.load()` caches at class level permanently with no public reset hook; testing with multiple configs requires separate processes. Expose `Configuration._reset_instance()` (or similar).
 - **Validation of resolved values** — `api_url` should be checked for a trailing `/v1`; `beancount_folder` and `beancount_main_file` should exist at load time; `receipts_username` / `receipts_password` should not be empty. Fail fast with a clear message.
-- **Retry logic** — `RemoteVM.fetch_receipt()`, `RemoteVM.remove_receipt()`, and `RemoteVM.list_receipts()` (`client/server.py`) make one attempt each. A transient network failure on the receipts VM causes the entire import to fail. Add a 3-retry loop with exponential backoff using `tenacity` or a simple helper.
+- **Retry logic** — `DocumentsClient.fetch_receipt()`, `DocumentsClient.remove_receipt()`, and `DocumentsClient.list_receipts()` (`client/server/documents.py`) make one attempt each. A transient network failure on the receipts VM causes the entire import to fail. Add a 3-retry loop with exponential backoff using `tenacity` or a simple helper.
 - **Pagination for large directories** — `Client.ls("/", detail=True)` assumes all receipts fit in one listing. Most WebDAV implementations don't paginate but it's worth protecting against very large directories (thousands of files) by adding a configurable limit + warning to the server-side list handler.
 - **beanhand.json client and server config files shared** — Both `beanhand.json` config schemas share the same file on disk (`~/.config/beanhand.json`). The server reads its fields first, then the client reads its fields. This is fine and is intended behavior.
 - **Empty `__init__.py` in `beanhand/`, `client/`, `server/`** — this program is not a library but a program designed to be consumed via the CLI.

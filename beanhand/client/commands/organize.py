@@ -5,15 +5,15 @@ from pathlib import Path
 
 from beanhand.client.beanfiles import predict_receipt_destination_path
 from beanhand.client.config import Configuration
-from beanhand.client.server import (
-    RemoteVM,
+from beanhand.client.server.documents import (
+    DocumentsClient,
     save_receipt,
 )
 
 
 def organize_receipt(
     beancount_folder: Path,
-    vm: RemoteVM,
+    vm: DocumentsClient,
     transaction_date: date,
     filename: str,
     account: str,
@@ -44,7 +44,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     tdate = datetime.strptime(args.date, "%Y-%m-%d").date()
     receipt_path = organize_receipt(
         cfg.beancount.main_folder,
-        RemoteVM.from_cfg(cfg),
+        DocumentsClient.from_cfg(cfg),
         tdate,
         args.filename,
         args.account,

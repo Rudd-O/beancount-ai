@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
-from beanhand.server.commands.refine import run as do_refine
+from beanhand.server.ai.commands.refine import run as do_refine
 
 
 def _fake_cfg() -> mock.MagicMock:

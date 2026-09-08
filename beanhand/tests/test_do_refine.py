@@ -2,6 +2,7 @@
 """Integration-style tests for the client's do_refine (LLM/VM interactions mocked)."""
 
 import argparse
+import base64
 import io
 import json
 import pathlib
@@ -13,9 +14,9 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
-from beanhand.client import server as client_cli
 from beanhand.client.commands import refine
 from beanhand.client.config import BeancountConfiguration, Configuration
+from beanhand.client.server import ai, documents
 
 ORIGINAL_BLOCK = (
     '2026-03-15 * "Coop" "Groceries"\n'
@@ -55,7 +56,8 @@ def _make_config(folder: pathlib.Path) -> Configuration:
         ingestion_destination_file=None,
     )
     cfg = object.__new__(Configuration)
-    cfg.target_vm = None
+    cfg.documents_target_vm = None
+    cfg.ai_target_vm = None
     cfg.beancount = bc
     return cfg
 
@@ -84,7 +86,7 @@ class _StdinCapture(io.BytesIO):
 
 @pytest.fixture
 def fake_call(monkeypatch: "pytest.MonkeyPatch") -> dict[str, Any]:
-    """Patched RemoteVM._call emitting a canned LLM output. Returns a control dict."""
+    """Patched AIVM._call emitting a canned LLM output. Returns a control dict."""
     state: dict[str, Any] = {
         "llm_output": "",
         "proc": mock.MagicMock(),
@@ -95,8 +97,11 @@ def fake_call(monkeypatch: "pytest.MonkeyPatch") -> dict[str, Any]:
     state["proc"].wait.return_value = 0
 
     def _fake_call(
-        self: object, action: str, arg: str | None = None
+        self: Any,
+        action: str,
+        arg: str | None = None,
     ) -> tuple[list[str], mock.MagicMock, _StdinCapture, io.BytesIO]:
+        assert self.program == "beanhand-ai-server", self.program
         assert action == "beanhand.Refine", action
         assert arg is None  # refine carries no CLI argument
         stdin = _StdinCapture()
@@ -106,7 +111,7 @@ def fake_call(monkeypatch: "pytest.MonkeyPatch") -> dict[str, Any]:
         stdout = io.BytesIO(_jsonl_stream(state["llm_output"]).encode("utf-8"))
         return (["cmd"], state["proc"], stdin, stdout)
 
-    monkeypatch.setattr(client_cli.RemoteVM, "_call", _fake_call)
+    monkeypatch.setattr(ai.AIClient, "_call", _fake_call)
     return state
 
 
@@ -145,8 +150,8 @@ def test_do_refine_writes_refined_block(
         {"name": "Expenses:Current:Food"},
     ]
     assert len(payload["documents"]) == 1
-    assert payload["documents"][0]["filepath"] == "receipts/2026-03-15.coop.pdf"
-    assert payload["documents"][0]["data"]  # base64, non-empty
+    assert payload["documents"][0]["filename"] == "2026-03-15.coop.pdf"
+    assert base64.b64decode(payload["documents"][0]["content"]) == b"%PDF-1.4 fake"
 
 
 def test_do_refine_no_flag_does_not_write(
@@ -246,9 +251,9 @@ def test_do_refine_line_not_in_transaction(
 def test_do_refine_malformed_llm_output(
     tmp_path: pathlib.Path,
     fake_call: dict[str, Any],
-    capsys: "pytest.CaptureFixture[str]",
 ) -> None:
     cfg = _make_config(tmp_path)
+    original = (tmp_path / "main.bean").read_text(encoding="utf-8")
     fake_call["llm_output"] = "not json at all"
     args = argparse.Namespace(
         file_path=str(tmp_path / "main.bean"),
@@ -258,9 +263,10 @@ def test_do_refine_malformed_llm_output(
         clear=False,
         only_show_affected=False,
     )
-    with pytest.raises(SystemExit):
+    with pytest.raises(Exception, match="Error interpreting LLM response"):
         refine.run(cfg, args)
-    assert "could not parse LLM response" in capsys.readouterr().err
+    # The file must be left untouched.
+    assert (tmp_path / "main.bean").read_text(encoding="utf-8") == original
 
 
 def test_do_refine_interactive_no(

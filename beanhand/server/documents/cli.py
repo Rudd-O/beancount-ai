@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""beanhand-server — qrexec RPC service for receipt processing (runs on VM with receipts).
+"""beanhand-documents-server — qrexec RPC service for receipt document operations
+(listing, fetching, removing).  Runs on the VM that has the receipts.
 
 Config is read from ~/.config/beanhand.json unless overridden.
-As a qrexec service, it reads nothing from stdin and only writes structured results to stdout.
 """
 
 import argparse
+import sys
 
-from beanhand.server.commands import (
-    associate,
+from beanhand.server.documents.commands import (
     fetch,
     listcmds,
-    process,
-    refine,
     remove,
 )
 
@@ -21,9 +19,8 @@ from .config import Configuration
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="beanhand-server",
-        description="Backend RPC service for the beanhand CLI."
-        "  This is the program in charge of fetching documents and talking to the LLM.",
+        prog="beanhand-documents-server",
+        description="Backend RPC service in charge of fetching and erasing documents.",
     )
     ap.add_argument(
         "--config",
@@ -35,11 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = ap.add_subparsers(dest="command")
     for p in [
         listcmds.subcommand_parser,
-        process.subcommand_parser,
         fetch.subcommand_parser,
-        associate.subcommand_parser,
         remove.subcommand_parser,
-        refine.subcommand_parser,
     ]:
         sp = p(sp)
 
@@ -47,8 +41,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    import sys
-
     ap = build_parser()
     args = ap.parse_args()
 
@@ -62,10 +54,7 @@ def main() -> None:
         "beanhand.ListUningested": listcmds.do_list_uningested,
         "beanhand.ListUnassociated": listcmds.do_list_unassociated,
         "beanhand.Fetch": fetch.run,
-        "beanhand.Process": process.run,
-        "beanhand.HelpAssociateReceipt": associate.run,
         "beanhand.Remove": remove.run,
-        "beanhand.Refine": refine.run,
     }
     handler = dispatch.get(args.command)
     if handler is None:

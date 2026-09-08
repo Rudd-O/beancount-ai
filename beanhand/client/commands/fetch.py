@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 
 from beanhand.client.config import Configuration
-from beanhand.client.server import RemoteVM, save_receipt
+from beanhand.client.server.documents import DocumentsClient, save_receipt
 
 
 def run(cfg: Configuration, args: argparse.Namespace) -> None:
@@ -11,7 +11,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
 
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
-    gotten = RemoteVM.from_cfg(cfg).fetch_receipt(args.filename)
+    gotten = DocumentsClient.from_cfg(cfg).fetch_receipt(args.filename)
     save_receipt(Path(args.destination), gotten)
 
 

@@ -10,8 +10,9 @@ beanhand/
 │
 ├── beanhand/structs.py                    # request/response TypedDicts shared by client and server
 │
-├── beanhand/server/                       # Runs on server VM which has access to receipts and LLM
-│   ├── cli.py                                 # beanhand-server entry point: build_parser() + dispatch table
+├── beanhand/server/                       # Runs on the VM(s) which have access to receipts and the LLM
+│   ├── documents_cli.py                       # beanhand-documents-server entry point: beanhand.* list/fetch/remove subcommands
+│   ├── ai_cli.py                              # beanhand-ai-server entry point: beanhand.* LLM subcommands
 │   ├── commands/                              # one module per beanhand.* subcommand
 │   │   ├── listcmds.py                        # beanhand.ListUningested / beanhand.ListUnassociated
 │   │   ├── process.py                         # beanhand.Process
@@ -40,7 +41,10 @@ beanhand/
     ├── config.py                              # client-side configuration
     ├── beancount_loader.py                    # loads Beancount data (queries / candidate contexts)
     ├── beanfiles.py                           # raw Beancount file ops: tx splitting, doc metadata, receipt organization
-    ├── server.py                              # qrexec/subprocess transport (RemoteVM) + LLM streaming capture
+    ├── server/                                # one client-side accessor per server program
+    │   ├── transport.py                       # shared qrexec/subprocess transport (ServerTransport base)
+    │   ├── documents.py                       # DocumentsVM: list/fetch/remove receipts + save/preview helpers
+    │   └── ai.py                              # AIVM: process/associate/refine + LLM streaming capture
     └── display.py                             # colored unified-diff printing
 ```
 
@@ -52,11 +56,15 @@ to catch further problems with the code.
 
 ## How to run
 
-**beanhand-server** — runs on the VM that has receipt files + LLM access. CLI subcommands:
-- `beanhand-server beanhand.ListUningested` / `beanhand.ListUnassociated`  list receipts as JSON
-- `beanhand-server beanhand.Process <filename>`        processes one receipt via OpenAI-compatible API (produces JSONL output)
-- `beanhand-server beanhand.Refine`                      refines a transaction; request arrives as plain JSON on stdin (no positional argument, produces JSONL output)
-- `beanhand-server beanhand.HelpAssociateReceipt <filename>`  matches a receipt against candidate transactions (candidates arrive on stdin)
+**beanhand-documents-server** — runs on the VM that has the receipt files. Needs only the `documents` config section. CLI subcommands:
+- `beanhand-documents-server beanhand.ListUningested` / `beanhand.ListUnassociated`  list receipts as JSON
+- `beanhand-documents-server beanhand.Fetch <filename>`  writes one JSON metadata line + the raw receipt bytes to stdout
+- `beanhand-documents-server beanhand.Remove <filename>`  deletes a receipt
+
+**beanhand-ai-server** — runs on the VM with access to the LLM. Needs only the `ai` config section; it never touches the receipt storage (receipts arrive inline via stdin). CLI subcommands (all argumentless, input on stdin):
+- `beanhand-ai-server beanhand.Process`      `{"accounts": [...], "receipt": {...}}` on stdin; processes a receipt via the OpenAI-compatible API (produces JSONL output)
+- `beanhand-ai-server beanhand.HelpAssociateReceipt`  first stdin line: the receipt; then the candidate transactions; matches a receipt against candidates
+- `beanhand-ai-server beanhand.Refine`       refines a transaction; request arrives as plain JSON on stdin (produces JSONL output)
 
 **beanhand** — runs on the VM with Beancount data. CLI subcommands:
 - `beanhand list-uningested` / `list-unassociated`  → print receipt filenames (one per line)
@@ -64,35 +72,46 @@ to catch further problems with the code.
 - `beanhand refine <file_path> <target>...` → refine one or more transactions using their linked documents; each target is a 1-based line number (N), an inclusive line range (A-B), or an open range to the end of the file (A-end); targets must be strictly ascending and non-overlapping (see docs/specs/Refine multi-range target specification.md)
 - `beanhand ingest` / `import <filename>` / `associate` / `fetch` / `remove` / `organize`
 
-Default config: `~/.config/beanhand.json`. Both clients also support `--config <path>` and `$BEANHAND_CONFIG`.
+Default config: `~/.config/beanhand.json`. All three programs support `--config <path>` and `$BEANHAND_CONFIG`.
 
-**Local testing**: set `"target_vm": null` in client config so the client spawns the server as a subprocess
+**Local testing**: omit a `vm` key from the `documents` and `ai` sections of the
+client config (or omit the sections altogether) so the client spawns each server as a subprocess
 (arguments hex-encoded just as if the server were running in a separate VM).
 
 ## Configuration (`~/.config/beanhand.json`)
 
-Both programs read from the same config file by default `~/.config/beanhand.json` (but see below for more).
+All three programs read from the same config file by default `~/.config/beanhand.json`, but each uses only the
+sections it needs: the client uses `beancount` plus the `documents` and `ai` role sections (each optionally
+carrying a `vm` key, or an explicit `backend: "qubes"` + `vm`, that names a Qubes VM; absent that the role is
+co-located and the attribute resolves to `None`), the documents server uses `documents`,
+and the AI server uses `ai` (a server's config section is validated only when it is first accessed, so a
+documents-server config need not carry an `ai` section and vice versa).
 
 Refer to `README.md` for configuration details and values.
 
 ## Server-client transport
 
-For security reasons, the software is split into two parts:
+For security reasons, the software is split into three parts:
 
 1. The client: runs on the virtual machine dedicated to accounting, where all the
    Beancount files reside.
-2. The server: runs on the virtual machine that has the receipts, and also access
-   to an OpenAI-compatible LLM API that will process the receipts and turn them into
+2. The documents server: runs on the virtual machine that has the receipts.
+3. The AI server: runs on the virtual machine that has access to an
+   OpenAI-compatible LLM API that will process the receipts and turn them into
    Beancount-formatted transactions.
 
-- **Same host** (`target_vm: null`): client spawns server via subprocess, passes hex-encoded subcommand + args.
-- **Different VM** (qrexec): service endpoint is `<subcommand>+<hex-encoded-args>`. The RPC handler lives at `/etc/qubes/rpc/beanhand.*` on the server VM.
+The two servers may run on the same or on different VMs. The client fetches any
+document an AI operation needs from the documents server and relays it to the AI
+server over stdin, so the AI server never touches the receipt storage.
 
-When server and client are on the same machine (client's `config.json` says `target_vm: null`), then
-client spawns server as subprocess and passes subcommand + command line argument directly, albeit encoding
+- **Same host** (`*_target_vm: null`): client spawns the server via subprocess, passes hex-encoded subcommand + args.
+- **Different VM** (qrexec): service endpoint is `<subcommand>+<hex-encoded-args>`. The RPC handler lives at `/etc/qubes/rpc/beanhand.*` on the target VM (the documents server's handlers run `beanhand-documents-server`, the AI server's run `beanhand-ai-server`).
+
+When a server and the client are on the same machine (client's `config.json` says the matching `_target_vm` key is `null`), then
+client spawns that server as subprocess and passes subcommand + command line argument directly, albeit encoding
 argument as hex before invocation.
 
-When server is on another VM, qrexec communication is used, and the service call endpoint becomes
+When a server is on another VM, qrexec communication is used, and the service call endpoint becomes
 the subcommand joined with a plus sign to the hex-encoded argument (if needed by the call).
 
 Client has the ability to send stdin to server, and server can respond via stdout.

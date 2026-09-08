@@ -2,19 +2,19 @@ import datetime
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import Literal, cast
 
 from webdav4.client import Client  # type:ignore
-from webdav4.client import ResourceNotFound as WebDAVResourceNotFound
+from webdav4.client import (  # pyright: ignore[reportMissingTypeStubs]
+    ResourceNotFound as WebDAVResourceNotFound,
+)
 
-from beanhand.server.config import (
-    LocalFileDocumentSourcesConfiguration,
-    WebDAVDocumentSourcesConfiguration,
+from beanhand.server.documents.config import (
+    Configuration,
+    LocalFileConfiguration,
+    WebDAVConfiguration,
 )
 from beanhand.structs import FetchedReceipt, ItemListing
-
-if TYPE_CHECKING:
-    from beanhand.server.config import Configuration
 
 
 class ResourceNotFoundError(FileNotFoundError):
@@ -55,17 +55,17 @@ Category = Literal["unassociated", "uningested"]
 
 def make_receipt_backend(cfg: Configuration, category: Category) -> ReceiptBackend:
     """Return the receipt backend instance for the configured storage backend."""
-    if isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration):
-        return WebDAVClient(cfg.documents, category)
-    if isinstance(cfg.documents, LocalFileDocumentSourcesConfiguration):
-        return LocalFileBackend(cfg.documents, category)
-    raise ValueError(f"no receipt backend configured: {type(cfg.documents).__name__}")
+    if isinstance(cfg, WebDAVConfiguration):
+        return WebDAVClient(cfg, category)
+    if isinstance(cfg, LocalFileConfiguration):
+        return LocalFileBackend(cfg, category)
+    raise ValueError(f"no receipt backend configured: {type(cfg).__name__}")
 
 
 class WebDAVClient(ReceiptBackend):
     def __init__(
         self,
-        cfg: WebDAVDocumentSourcesConfiguration,
+        cfg: WebDAVConfiguration,
         category: Category,
     ):
         if category == "uningested":
@@ -97,7 +97,7 @@ class WebDAVClient(ReceiptBackend):
 
 
 class LocalFileBackend(ReceiptBackend):
-    def __init__(self, cfg: LocalFileDocumentSourcesConfiguration, category: Category):
+    def __init__(self, cfg: LocalFileConfiguration, category: Category):
         self.folder = (
             cfg.receipts_uningested_folder()
             if category == "uningested"

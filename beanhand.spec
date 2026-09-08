@@ -34,14 +34,15 @@ Provides:       python3-beancount-ai = %{version}-%{release}
 %description -n python3-%{package_name} %_description
 
 %package -n python3-%{package_name}-qubes-rpc
-Summary:        Provides Qubes services to invoke beanhand-server from another Qubes OS VM
+Summary:        Provides Qubes services to invoke beanhand-documents-server and beanhand-ai-server from another Qubes OS VM
 Requires:       qubes-core-qrexec
 Requires:       python3-%{package_name} = %{version}-%{release}
 Obsoletes:      python3-beancount-ai-qubes-rpc < 0.7.2
 Provides:       python3-beancount-ai-qubes-rpc = %{version}-%{release}
 
 %description -n python3-%{package_name}-qubes-rpc %{expand:
-These are stub files to provide Qubes RPC services to VMs authorized to invoke beanhand-server.}
+These are stub files to provide Qubes RPC services to VMs authorized to invoke
+beanhand-documents-server and beanhand-ai-server.}
 
 %prep
 %autosetup -p1 -n %{module_name}-%{version}
@@ -65,7 +66,6 @@ mkdir -p %{buildroot}/%{_bindir}
 cd %{buildroot}/%{_bindir}
 ln -sf %{package_name} bean-ai
 ln -sf %{package_name} bh
-ln -sf %{package_name}-server bean-ai-server
 
 %pyproject_save_files %{module_name}
 
@@ -77,15 +77,19 @@ ln -sf %{package_name}-server bean-ai-server
 %files -n python3-%{package_name} -f %{pyproject_files}
 %{_bindir}/%{package_name}
 %{_bindir}/bh
-%{_bindir}/%{package_name}-server
+%{_bindir}/%{package_name}-documents-server
+%{_bindir}/%{package_name}-ai-server
 %{_bindir}/bean-ai
-%{_bindir}/bean-ai-server
 %doc README.md docs/
 
 %files -n python3-%{package_name}-qubes-rpc
 %attr(0755, root, root) /etc/qubes-rpc/beanhand.*
 
 %changelog
+* Tue Sep 08 2026 Manuel Amador <rudd-o@rudd-o.com> 0.7.3
+- Split the single beanhand-server program into beanhand-documents-server and
+  beanhand-ai-server, which can now run on two separate VMs.
 * Mon Sep 07 2026 Manuel Amador <rudd-o@rudd-o.com> 0.7.2
+- Rename program from beancount-ai to beanhand.
 * Sun Aug 16 2026 Manuel Amador <rudd-o@rudd-o.com> 0.1.0
 - First RPM packaging release

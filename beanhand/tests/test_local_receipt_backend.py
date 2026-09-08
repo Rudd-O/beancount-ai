@@ -21,12 +21,13 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
-from beanhand.server.config import (
+from beanhand.server.ai.config import Configuration as ConfigurationFromAI
+from beanhand.server.documents.backends import LocalFileBackend, ResourceNotFoundError
+from beanhand.server.documents.config import (
     Configuration,
-    LocalFileDocumentSourcesConfiguration,
-    WebDAVDocumentSourcesConfiguration,
+    LocalFileConfiguration,
+    WebDAVConfiguration,
 )
-from beanhand.server.storage import LocalFileBackend, ResourceNotFoundError
 from beanhand.structs import FetchedReceipt
 
 # ===========================================================================
@@ -34,8 +35,8 @@ from beanhand.structs import FetchedReceipt
 # ===========================================================================
 
 
-def _local_config(tmp_path: Path) -> LocalFileDocumentSourcesConfiguration:
-    cfg = LocalFileDocumentSourcesConfiguration()
+def _local_config(tmp_path: Path) -> LocalFileConfiguration:
+    cfg = LocalFileConfiguration()
     cfg.uningested_receipts_folder = tmp_path / "receipts" / "uningested"
     cfg.unassociated_receipts_folder = tmp_path / "receipts" / "unassociated"
     return cfg
@@ -49,16 +50,21 @@ def _seed(base: Path, name: str, content: bytes) -> Path:
 
 
 def _write_server_config(
-    tmp_path: Path, documents: Mapping[str, object], name: str = "cfg.json"
+    tmp_path: Path,
+    documents: Mapping[str, object] | None = None,
+    *,
+    ai: bool = True,
+    name: str = "cfg.json",
 ) -> Path:
-    data = {
-        "ai": {
+    data: dict[str, object] = {}
+    if ai:
+        data["ai"] = {
             "api_url": "http://llm.example.com/v1",
             "token": "tok",
             "model_name": "model",
-        },
-        "documents": documents,
-    }
+        }
+    if documents is not None:
+        data["documents"] = documents
     fp = tmp_path / name
     fp.write_text(json.dumps(data))
     return fp
@@ -192,18 +198,11 @@ class TestLoadDocuments:
         )
         with mock.patch.object(Configuration, "instance", None):
             cfg = Configuration.load(str(fp))
-        assert isinstance(cfg.documents, LocalFileDocumentSourcesConfiguration)
-        assert cfg.documents.uningested_receipts_folder == Path("/data/uningested")
-        assert (
-            cfg.documents.unassociated_receipts_folder == Path("/data/unassociated")
-        )
-        assert (
-            cfg.documents.receipts_uningested_folder() == Path("/data/uningested")
-        )
-        assert (
-            cfg.documents.receipts_unassociated_folder()
-            == Path("/data/unassociated")
-        )
+        assert isinstance(cfg, LocalFileConfiguration)
+        assert cfg.uningested_receipts_folder == Path("/data/uningested")
+        assert cfg.unassociated_receipts_folder == Path("/data/unassociated")
+        assert cfg.receipts_uningested_folder() == Path("/data/uningested")
+        assert cfg.receipts_unassociated_folder() == Path("/data/unassociated")
 
     def test_independent_folders(self, tmp_path: Path) -> None:
         """The two receipt folders may live in unrelated directories."""
@@ -218,53 +217,41 @@ class TestLoadDocuments:
         )
         with mock.patch.object(Configuration, "instance", None):
             cfg = Configuration.load(str(fp))
-        assert isinstance(cfg.documents, LocalFileDocumentSourcesConfiguration)
-        assert cfg.documents.uningested_receipts_folder == Path("/a/b/c")
-        assert (
-            cfg.documents.unassociated_receipts_folder
-            == Path("/completely/other/place")
-        )
-        assert cfg.documents.receipts_uningested_folder() == Path("/a/b/c")
-        assert (
-            cfg.documents.receipts_unassociated_folder()
-            == Path("/completely/other/place")
-        )
+        assert isinstance(cfg, LocalFileConfiguration)
+        assert cfg.uningested_receipts_folder == Path("/a/b/c")
+        assert cfg.unassociated_receipts_folder == Path("/completely/other/place")
+        assert cfg.receipts_uningested_folder() == Path("/a/b/c")
+        assert cfg.receipts_unassociated_folder() == Path("/completely/other/place")
 
     def test_implicit_local_backend(self, tmp_path: Path) -> None:
         fp = _write_server_config(tmp_path, dict(LOCAL_DOC_FIELDS))
         with mock.patch.object(Configuration, "instance", None):
             cfg = Configuration.load(str(fp))
-        assert isinstance(cfg.documents, LocalFileDocumentSourcesConfiguration)
-        assert (
-            cfg.documents.uningested_receipts_folder == Path("/data/uningested")
-        )
+        assert isinstance(cfg, LocalFileConfiguration)
+        assert cfg.uningested_receipts_folder == Path("/data/uningested")
 
     def test_legacy_webdav_config_still_works(self, tmp_path: Path) -> None:
         legacy = {k: v for k, v in WEBDAV_DOCS.items() if k != "backend"}
         fp = _write_server_config(tmp_path, legacy, name="legacy.json")
         with mock.patch.object(Configuration, "instance", None):
             cfg = Configuration.load(str(fp))
-        assert isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration)
-        assert cfg.documents.username == "u"
-        assert cfg.documents.base_url == "https://dav.example.com/files"
+        assert isinstance(cfg, WebDAVConfiguration)
+        assert cfg.username == "u"
+        assert cfg.base_url == "https://dav.example.com/files"
 
     def test_explicit_webdav_backend(self, tmp_path: Path) -> None:
         fp = _write_server_config(tmp_path, dict(WEBDAV_DOCS), name="webdav.json")
         with mock.patch.object(Configuration, "instance", None):
             cfg = Configuration.load(str(fp))
-        assert isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration)
+        assert isinstance(cfg, WebDAVConfiguration)
 
-    def test_implicit_webdav_when_both_local_keys_absent(
-        self, tmp_path: Path
-    ) -> None:
+    def test_implicit_webdav_when_both_local_keys_absent(self, tmp_path: Path) -> None:
         fp = _write_server_config(tmp_path, dict(WEBDAV_DOCS), name="imp.json")
         with mock.patch.object(Configuration, "instance", None):
             cfg = Configuration.load(str(fp))
-        assert isinstance(cfg.documents, WebDAVDocumentSourcesConfiguration)
+        assert isinstance(cfg, WebDAVConfiguration)
 
-    def test_explicit_backend_wins_over_inferred(
-        self, tmp_path: Path
-    ) -> None:
+    def test_explicit_backend_wins_over_inferred(self, tmp_path: Path) -> None:
         # Explicit backend=local is honored even when a webdav key is also
         # present.
         fp = _write_server_config(
@@ -274,7 +261,7 @@ class TestLoadDocuments:
         )
         with mock.patch.object(Configuration, "instance", None):
             cfg = Configuration.load(str(fp))
-        assert isinstance(cfg.documents, LocalFileDocumentSourcesConfiguration)
+        assert isinstance(cfg, LocalFileConfiguration)
 
     def test_local_backend_missing_key_raises(self, tmp_path: Path) -> None:
         fp = _write_server_config(
@@ -286,7 +273,8 @@ class TestLoadDocuments:
             mock.patch.object(Configuration, "instance", None),
             pytest.raises(ValueError, match="unassociated_receipts_folder"),
         ):
-            Configuration.load(str(fp))
+            cfg = Configuration.load(str(fp))
+            cfg  # noqa: B018
 
     def test_webdav_backend_missing_key_raises(self, tmp_path: Path) -> None:
         fp = _write_server_config(
@@ -302,27 +290,46 @@ class TestLoadDocuments:
             mock.patch.object(Configuration, "instance", None),
             pytest.raises(ValueError, match="base_url"),
         ):
-            Configuration.load(str(fp))
+            cfg = Configuration.load(str(fp))
+            cfg  # noqa: B018
 
     def test_unknown_backend_raises(self, tmp_path: Path) -> None:
-        fp = _write_server_config(
-            tmp_path, {"backend": "s3", **LOCAL_DOC_FIELDS}
-        )
+        fp = _write_server_config(tmp_path, {"backend": "s3", **LOCAL_DOC_FIELDS})
         with (
             mock.patch.object(Configuration, "instance", None),
             pytest.raises(ValueError, match="unknown documents backend"),
         ):
-            Configuration.load(str(fp))
+            cfg = Configuration.load(str(fp))
+            cfg  # noqa: B018
+
+
+# ===========================================================================
+# Lazy section parsing (split into documents / AI servers)
+# ===========================================================================
+
+
+class TestClassInstance:
+    def test_sections_parsed_only_once(self, tmp_path: Path) -> None:
+        fp = _write_server_config(
+            tmp_path,
+            {"backend": "local", **LOCAL_DOC_FIELDS},
+            name="once.json",
+        )
+        with mock.patch.object(Configuration, "instance", None):
+            cfg = Configuration.load(str(fp))
+        assert cfg is cfg
 
 
 class TestLocationNames:
     def test_local_names(self, tmp_path: Path) -> None:
         cfg = _local_config(tmp_path)
         assert str(cfg.receipts_uningested_folder()) in cfg.uningested_location_name()
-        assert str(cfg.receipts_unassociated_folder()) in cfg.unassociated_location_name()
+        assert (
+            str(cfg.receipts_unassociated_folder()) in cfg.unassociated_location_name()
+        )
 
     def test_webdav_names(self) -> None:
-        cfg = WebDAVDocumentSourcesConfiguration()
+        cfg = WebDAVConfiguration()
         cfg.username = "u"
         cfg.password = "p"
         cfg.base_url = "https://dav.example.com"
@@ -336,8 +343,8 @@ class TestBackendIntegration:
     def test_loaded_config_produces_working_backend(
         self, server_config_instance: Configuration
     ) -> None:
-        docs = server_config_instance.documents
-        assert isinstance(docs, LocalFileDocumentSourcesConfiguration)
+        docs = server_config_instance
+        assert isinstance(docs, LocalFileConfiguration)
         _seed(docs.uningested_receipts_folder, "a.jpg", b"A")
         _seed(docs.unassociated_receipts_folder, "b.pdf", b"B")
 

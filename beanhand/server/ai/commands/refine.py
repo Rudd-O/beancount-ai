@@ -1,9 +1,7 @@
 import argparse
-import base64
 import json
 import sys
 from pathlib import Path
-from typing import Any, cast
 
 from openai.types.chat import (
     ChatCompletionContentPartImageParam,
@@ -11,14 +9,16 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
 )
 
-from beanhand.server.config import Configuration
+from beanhand.server.ai.config import Configuration
 from beanhand.server.llm import (
-    VALID_EXTENSIONS,
     file_to_image_parts,
     ssl_verify_path,
     stream_reasoning_and_output,
 )
-from beanhand.structs import RefineRequest, check_account_refs
+from beanhand.structs import (
+    VALID_EXTENSIONS,
+    RefineRequest,
+)
 
 TRANSACTION_REFINEMENT_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "TRANSACTION_REFINEMENT_PROMPT.md"
@@ -38,55 +38,15 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     from httpx import Client as HttpxClient
     from openai import OpenAI
 
-    request_data_pre = json.loads(sys.stdin.read())
-    if (
-        not isinstance(request_data_pre, dict)
-        or "transaction_text" not in request_data_pre
-        or not isinstance(request_data_pre["transaction_text"], str)
-        or not request_data_pre["transaction_text"].strip()
-    ):
-        print("error: Invalid request: missing transaction_text", file=sys.stderr)
-        sys.exit(1)
-
-    request_data: dict[Any, Any] = request_data_pre  # pyright: ignore[reportUnknownVariableType]
-    if "documents" not in request_data:
-        request_data["documents"] = []
-    for dn, d in enumerate(cast(list[Any], request_data["documents"])):
-        if "filepath" not in d or not isinstance(d["filepath"], str):
-            print(
-                f"error: Invalid request: document {dn} missing or invalid file path",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if "data" not in d or not isinstance(d["data"], str):
-            print(
-                f"error: Invalid request: document {dn} missing or invalid data",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    if "accounts" not in request_data:
-        print(
-            "error: Invalid request: account list missing or invalid: missing",
-            file=sys.stderr,
-        )
-        sys.exit(1)
     try:
-        accounts = check_account_refs(request_data["accounts"])
-    except ValueError as reason:
-        print(
-            f"error: Invalid request: account list missing or invalid: {reason}",
-            file=sys.stderr,
-        )
+        request = RefineRequest.deserialize(sys.stdin.read())
+    except Exception as e:
+        print(f"error while reading request from client: {e}", file=sys.stderr)
         sys.exit(1)
-
-    request = cast(RefineRequest, request_data)
-    transaction_text = request["transaction_text"]
-    accounts = request["accounts"]
-    documents = request.get("documents", [])
 
     image_parts: list[ChatCompletionContentPartImageParam] = []
-    for doc in documents:
-        fn = Path(doc["filepath"])
+    for doc in request.documents:
+        fn = Path(doc.filename)
         suffix = fn.suffix.lower()
         if suffix not in VALID_EXTENSIONS:
             print(
@@ -94,18 +54,17 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
             continue
-        raw = base64.b64decode(doc["data"])
-        image_parts.extend(file_to_image_parts(doc["filepath"], raw))
+        image_parts.extend(file_to_image_parts(doc.filename, doc.content))
 
-    account_text = json.dumps(accounts, indent=2)
+    account_text = json.dumps(request.accounts, indent=2)
     prompt_text = TRANSACTION_REFINEMENT_PROMPT_PATH.read_text()
     prompt_text = prompt_text.format(
-        transaction_text=transaction_text, accounts=account_text
+        transaction_text=request.transaction_text, accounts=account_text
     )
 
     client = OpenAI(
-        api_key=cfg.ai.token,
-        base_url=cfg.ai.api_url,
+        api_key=cfg.token,
+        base_url=cfg.api_url,
         http_client=HttpxClient(verify=ssl_verify_path()),
     )
 
@@ -119,7 +78,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     ]
 
     resp = client.chat.completions.create(
-        model=cfg.ai.model_name,
+        model=cfg.model_name,
         messages=messages,
         stream=True,
     )

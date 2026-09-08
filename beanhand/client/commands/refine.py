@@ -1,13 +1,10 @@
 import argparse
-import base64
 import difflib
-import json
+import os
 import re
-import subprocess
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import cast
 
 from beanhand.client.beancount_loader import (
     account_refs_or_die,
@@ -23,13 +20,16 @@ from beanhand.client.beanfiles import (
 )
 from beanhand.client.config import Configuration
 from beanhand.client.display import print_diff
-from beanhand.client.server import (
-    RemoteVM,
-    demarkdownify,
-    open_document,
-    stream_reasoning_and_capture_output,
+from beanhand.client.server.ai import (
+    AIClient,
 )
-from beanhand.structs import RefineRequest, RefineRequestDocument, load_json
+from beanhand.client.server.documents import (
+    open_document,
+)
+from beanhand.structs import (
+    ReceiptPayload,
+    RefineRequest,
+)
 
 _TX_HEADER_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2} [*!D]\s")
 _TX_DATE_REGEX = re.compile(r"^(\d{4}-\d{2}-\d{2})\s+[*!D]")
@@ -134,7 +134,7 @@ def validate_target_ranges(
     return resolved
 
 
-def preview_local_document(doc_path: str, tx_file: Path, cfg: Configuration) -> None:
+def preview_local_document(doc_path: str, tx_file: Path) -> None:
     """Open a client-local, already-linked document in the user's default viewer."""
     resolved = resolve_local_document_path(doc_path, tx_file)
     open_document(resolved)
@@ -198,6 +198,8 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
             lns.extend(block)
         return lns
 
+    ai_vm = AIClient.from_cfg(cfg)
+
     def do_refine_one(block_index: int, blocks: FileBlocks) -> None:  # noqa: C901
         """
         Attempt to refine the supplied transaction.
@@ -229,72 +231,37 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
         doc_paths = extract_document_paths(tx_block)
 
         # 4. Collect document contents (client-local, resolved near the tx file).
-        documents_data: list[RefineRequestDocument] = []
+        documents_data: list[tuple[str, ReceiptPayload]] = []
         for doc_path in doc_paths:
             resolved = resolve_local_document_path(doc_path, tx_file)
-            try:
-                raw = resolved.read_bytes()
-            except FileNotFoundError:
-                print(f"Error: linked document not found: {doc_path}", file=sys.stderr)
-                sys.exit(1)
+            raw = resolved.read_bytes()
             documents_data.append(
-                RefineRequestDocument(
-                    filepath=doc_path,
-                    data=base64.b64encode(raw).decode("ascii"),
+                (
+                    doc_path,
+                    ReceiptPayload(filename=os.path.basename(doc_path), content=raw),
                 )
             )
 
-        # 5. Call the server — plain-JSON payload on stdin (no command argument).
-        vm = RemoteVM.from_cfg(cfg)
-        try:
-            cmd, proc, stdin, stdout = vm.refine()
-        except subprocess.CalledProcessError as e:
-            raise Exception(f"Error refining receipt: {e}") from e
+        request = RefineRequest(
+            transaction_text="".join(tx_block),
+            accounts=account_refs_or_die(cfg.beancount.main_file, _tx_date(tx_block)),
+            documents=[x[1] for x in documents_data],
+        )
 
-        request_payload: RefineRequest = {
-            "transaction_text": "".join(tx_block),
-            "accounts": account_refs_or_die(
-                cfg.beancount.main_file, _tx_date(tx_block)
-            ),
-            "documents": documents_data,
-        }
-        stdin.write(json.dumps(request_payload).encode("utf-8"))
-        stdin.flush()
-        stdin.close()
-
-        llm_output = stream_reasoning_and_capture_output(stdout)
-        stdout.close()
-
-        ret = proc.wait()
-        if ret != 0:
-            raise subprocess.CalledProcessError(ret, cmd)
-
-        # 6. Parse the response — strip any markdown fences, then parse JSON.
-        llm_output = demarkdownify(llm_output).strip()
-        try:
-            resp = load_json(llm_output)
-            rewritten_tx_raw = cast(str, resp["transaction"])
-        except Exception:
-            print(
-                "Error: could not parse LLM response as JSON. Raw output:",
-                file=sys.stderr,
-            )
-            print(llm_output, file=sys.stderr)
-            sys.exit(1)
+        # 5. Call the AI server — plain-JSON payload on stdin (no command
+        # argument).
+        resp = ai_vm.refine(request)
 
         # We will not delete comments, either sent by the user in the original
         # transaction and returning to us, or inserted by the LLM.
-        lines = rewritten_tx_raw.splitlines(True)
+        lines = resp.transaction.splitlines(True)
         rewritten_tx = "".join(lines).rstrip("\n") + "\n"
 
         if not validate_refined_transaction(rewritten_tx):
-            print(
+            raise Exception(
                 "Error: LLM returned a malformed transaction (no header / "
-                "fewer than two postings). Raw output:",
-                file=sys.stderr,
+                "fewer than two postings)."
             )
-            print(llm_output, file=sys.stderr)
-            sys.exit(1)
 
         # 7. Reassemble the file with only the target block replaced.
         new_tx_block: list[str] = [
@@ -356,7 +323,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
             if answer == "n":
                 break
             if answer == "p" and documents_data:
-                preview_local_document(documents_data[0]["filepath"], tx_file, cfg)
+                preview_local_document(documents_data[0][0], tx_file)
                 continue
             if answer == "y":
                 blocks[block_index] = (

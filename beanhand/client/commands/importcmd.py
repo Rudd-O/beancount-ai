@@ -19,8 +19,11 @@ from beanhand.client.config import (
     Configuration,
 )
 from beanhand.client.display import print_diff
-from beanhand.client.server import (
-    RemoteVM,
+from beanhand.client.server.ai import (
+    AIClient,
+)
+from beanhand.client.server.documents import (
+    DocumentsClient,
     save_receipt,
 )
 from beanhand.structs import FetchedReceipt
@@ -42,7 +45,8 @@ class ImportResult:
 
     def __init__(
         self,
-        vm: RemoteVM,
+        documents_vm: DocumentsClient,
+        ai_vm: AIClient,
         beancount: BeancountConfiguration,
         filename: str,
     ) -> None:
@@ -53,18 +57,18 @@ class ImportResult:
         dest = beancount.ingestion_destination_path
         self._ingestion_guard = FileGuard.take(dest)
 
-        self.fetched_receipt = vm.fetch_receipt(filename)
+        self.fetched_receipt = documents_vm.fetch_receipt(filename)
 
-        beancount_transaction, account = vm.process_receipt(
-            filename, account_refs_or_die(beancount.main_file, date.today())
+        resp = ai_vm.process_receipt(
+            filename,
+            self.fetched_receipt,
+            account_refs_or_die(beancount.main_file, date.today()),
         )
         # Strip headline comments and newlines from the transaction.
-        while beancount_transaction.lstrip().startswith(";"):
-            beancount_transaction = "".join(
-                beancount_transaction.splitlines(True)[1:]
-            ).lstrip()
+        while resp.transaction.lstrip().startswith(";"):
+            resp.transaction = "".join(resp.transaction.splitlines(True)[1:]).lstrip()
 
-        datestr, reststr = beancount_transaction.split(" ", 1)
+        datestr, reststr = resp.transaction.split(" ", 1)
         # Take the text after the date, remove the transaction flag and the space next to it,
         # then use the payee and narration to construct a description for the receipt file name.
         # If there is a comment at the end of the line, strip it too.
@@ -79,11 +83,9 @@ class ImportResult:
         transdate = datetime.strptime(datestr, "%Y-%m-%d").date()
 
         receipt_path = predict_receipt_destination_path(
-            beancount.main_folder, transdate, filename, account, reststr
+            beancount.main_folder, transdate, filename, resp.payment_account, reststr
         )
-        formatted_tx = insert_document_metadata(
-            beancount_transaction, str(receipt_path)
-        )
+        formatted_tx = insert_document_metadata(resp.transaction, str(receipt_path))
 
         self.transaction_text = formatted_tx
         self.receipt_destination_path = receipt_path
@@ -195,7 +197,12 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
 
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
-    result = ImportResult(RemoteVM.from_cfg(cfg), cfg.beancount, args.filename)
+    result = ImportResult(
+        DocumentsClient.from_cfg(cfg),
+        AIClient.from_cfg(cfg),
+        cfg.beancount,
+        args.filename,
+    )
 
     diff = result.diff()
     if diff:

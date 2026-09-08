@@ -14,8 +14,6 @@ from openai.types.chat import (
 
 from beanhand.server.pdf import render_pdf_pages_to_png
 
-VALID_EXTENSIONS = frozenset((".jpg", ".jpeg", ".png", ".pdf"))
-
 
 def ssl_verify_path() -> ssl.SSLContext:
     """Resolve an SSL CA bundle path for use with ``httpx`` clients.

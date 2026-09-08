@@ -1,14 +1,12 @@
 import fcntl
 import json
-import os
 import sys
 import warnings
 from pathlib import Path
 from types import TracebackType
 from typing import IO, ClassVar
 
-CONF_DEFAULT = Path.home() / ".config" / "beanhand.json"
-CONF_FALLBACK = Path.home() / ".config" / "bean-ai.json"
+from beanhand.config import ConfigBase
 
 
 class BeancountConfiguration:
@@ -102,51 +100,31 @@ class BeancountConfiguration:
         return self.main_file.parent
 
 
-class Configuration:
+class Configuration(ConfigBase):
     """Configuration loaded from a beanhand JSON config file.
 
     Singleton that caches its first loaded instance at the class level.
     Use :meth:`load` to retrieve or initialise it.
 
     Attributes:
-        target_vm: Name of the Qubes VM where beanhand-server runs (omit to launch beanhand-server locally).
+        documents_target_vm: Name of the Qubes VM where
+            beanhand-documents-server runs; ``null`` launches it locally.
+        ai_target_vm: Name of the Qubes VM where beanhand-ai-server runs;
+            ``null`` launches it locally.
         beancount: an instance of BeancountConfiguration
     """
 
     instance: ClassVar["Configuration | None"] = None
     cfg_path: ClassVar[Path | None] = None  # which file was actually loaded
-    target_vm: str | None
+    documents_target_vm: str | None
+    ai_target_vm: str | None
     beancount: BeancountConfiguration
 
     def __init__(self) -> None:
         raise NotImplementedError("Use Configuration.load() to obtain an instance")
 
     @classmethod
-    def _get_cfg_path(cls, override: str | None) -> Path:
-        """Return the config file path, resolving overrides in order of priority.
-
-        Priority (highest → lowest):
-            1. ``--config`` CLI argument
-            2. ``BEANHAND_CONFIG`` environment variable
-            3. Default ``~/.config/beanhand.json``
-            4. Fallback ``~/.config/bean-ai.json``
-        """
-        if override:
-            return Path(override)
-        env_cfg = os.environ.get("BEANHAND_CONFIG")
-        if env_cfg:
-            return Path(env_cfg)
-        if os.path.exists(CONF_FALLBACK) and not os.path.exists(CONF_DEFAULT):
-            warnings.warn(
-                f"You are using fallback configuration file {CONF_FALLBACK}."
-                "  Fallback support will be removed in the future."
-                "  The new default configuration file lives at {CONF_DEFAULT}."
-            )
-            return CONF_FALLBACK
-        return CONF_DEFAULT
-
-    @classmethod
-    def load(cls, override: str | None = None) -> "Configuration":
+    def load(cls, override: str | None = None) -> "Configuration":  # noqa: C901
         """Load and cache the config from the resolved path.
 
         If called multiple times, only the *first* invocation's resolution is used;
@@ -161,7 +139,49 @@ class Configuration:
         with open(fp) as fh:
             data = json.load(fh)
         instance = cls.__new__(cls)
-        instance.target_vm = data.get("target_vm", None)
+
+        catchall_target_vm = data.get("target_vm", None)
+        if catchall_target_vm is not None:
+            if not isinstance(catchall_target_vm, str):
+                raise ValueError(
+                    f"target_vm in must be a VM name (non-empty string) when using its `qubes` backend"
+                )
+            warnings.warn(
+                f"You are using configuration key target_vm."
+                "  This will be removed in the future."
+                "  Migrate to specify ai:backend:vm and documents:backend:vm."
+            )
+        for sectname, attr in [
+            ("ai", "ai_target_vm"),
+            ("documents", "documents_target_vm"),
+        ]:
+            # Set it to default to None first.
+            setattr(instance, attr, None)
+            try:
+                section = data[sectname]
+            except KeyError:
+                if catchall_target_vm is None:
+                    raise ValueError(f"configuration must include a {sectname} section")
+                else:
+                    section = {"backend": "qubes", "vm": catchall_target_vm}
+            if not isinstance(section, dict):
+                raise ValueError(
+                    f"the {sectname} section in the configuration must be a dictionary"
+                )
+
+            if "vm" in section or section.get("backend") == "qubes":
+                invalid_keys = [b for b in section if b not in ["backend", "vm"]]
+                if invalid_keys:
+                    raise ValueError(
+                        f"if vm is specified in {sectname}, then other configuration keys ({invalid_keys}) may not be specified"
+                    )
+                vm_u = section.get("vm")
+                if not isinstance(vm_u, str) or not vm_u:
+                    raise ValueError(
+                        f"vm in section {sectname} must be a VM name (non-empty string) when using its `qubes` backend"
+                    )
+                setattr(instance, attr, vm_u)
+
         bean = data["beancount"]
         if "account_list_file" in bean:
             raise ValueError(

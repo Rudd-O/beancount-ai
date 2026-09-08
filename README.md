@@ -164,22 +164,23 @@ Those folders can be stored:
 
 ### Protecting your Beancount data
 
-`beanhand` guards against two ways your ledger could be damaged:
+`beanhand` guards against three ways your ledger could be damaged:
 
 * **Concurrent invocations.** The moment the configuration is loaded (before any subcommand runs), `beanhand` takes an exclusive advisory lock on your main Beancount file (`beancount.main_file`) and holds it for the duration of the whole subcommand.  If you run `beanhand` in one terminal while another `beanhand` (or any other process holding that lock) is still working, the second one prints a notice to standard error and then waits until the first one is done, instead of the two trampling each other's data.  In effect, data-modifying commands queue up one behind the other.
+* **No clobbering of your own edits.** The file-modifying commands (`refine`, `associate`, and `import` / `ingest`) fingerprint the Beancount file's content right after reading it and re-check the fingerprint before writing.  If the file changed on disk in the meantime — most commonly because you edited it in your own ledger while `beanhand` was talking to the LLM — `beanhand` refuses to write, reports which file changed, and exits without touching it, so your edits are preserved.  (Comparison is by content, not timestamp: touching a file's mtime does not trip it.)  Re-run the command to re-read the file and try again.
 * **Crash-during-write.** Every Beancount file write is flushed and pushed all the way to disk (`fsync`ed) before `beanhand` moves on, so a crash or power loss cannot leave a half-written ledger.
 
-**Do not independently edit any Beancount file** while any `beanhand` routine that may modify a Beancount file is running.  `beanhand` has no way to locking you out from editing a file while it is doing work on the same file.  If you do edit files before `beanhand` is done with them, you run the risk of corrupting them.
+Because of the fingerprint check you can edit a file *between* `beanhand` runs with no risk.  The one thing to avoid is editing a file *concurrently* with a data-modifying `beanhand` run: the fingerprint check will catch it and abort the run, but you will not lose your in-flight LLM effort.
 
 ### Naming convention for receipt files
 
-Imported receipts are saved under `<beancount_folder>/<account_with_slashes>/` with the naming pattern:
+Imported receipts are saved under `<beancount_folder>/<account_with_colons_replaced_by_slashes>/` with the naming pattern:
 
 ```
-<YYYY-MM-DD>_<description> — <original_filename>
+<YYYY-MM-DD>.<description> — <original_filename>
 ```
 
-For example, `2026-07-15_Groceries — IMG_1234.jpg`.
+For example, `2026-07-15.Groceries — IMG_1234.jpg` (the date is followed by a `.`; when there is no description, e.g. in `organize`, it is just `<YYYY-MM-DD>.<original_filename>`).
 
 Timestamps of the receipts are preserved.  The Beancount folder is the folder containing the main Beancount file you configured.
 
@@ -332,34 +333,60 @@ Accounts with no markers are absent by default (opt-in, not opt-out). If *no* ac
 | `documents.base_url` | `str` | *(webdav backend)* Base URL of the WebDAV server containing receipts.  As an example using Nextcloud, the base URL would be `https://nextcloud.example.com/remote.php/dav/files/MyUsername`. |
 | `documents.uningested_receipts_subfolder` | `str` | *(webdav backend)* Subfolder path (under `base_url`) where **new** (uningested) receipts are stored. |
 | `documents.unassociated_receipts_subfolder` | `str` | *(webdav backend)* Subfolder path (under `base_url`) where **existing** (unassociated) receipts, to be associated, are stored. |
+| `documents.vm` | `str` | *(optional, client-side)* Name of the Qubes VM where `beanhand-documents-server` runs. Omit it (or leave the section without `"backend": "qubes"`) to run the documents server locally as a subprocess instead. When the role is addressed via `qubes`, the section may carry only `vm` (and optionally `"backend": "qubes"`); when co-located, other keys are ignored by the client for address resolution. |
+| `ai.vm` | `str` | *(optional, client-side)* Name of the Qubes VM where `beanhand-ai-server` runs. Omit it (or leave the section without `"backend": "qubes"`) to run the AI server locally as a subprocess instead. When the role is addressed via `qubes`, the section may carry only `vm` (and optionally `"backend": "qubes"`); when co-located, other keys are ignored by the client for address resolution. |
 
 ### Split `beanhand` — for Qubes OS users
 
 *Section of interest only to Qubes OS users*
 
-This program supports *split operation* -- receipts and AI access in one VM (the server), Beancount files in another VM (the client).  In this mode, `beanhand` runs on the qube that has your Beancount files, and will talk to `beanhand-server` (which it normally does by spawning the process locally) through Qrexec communication channels targeting another VM, to obtain receipt data and talk to your LLM.
+This program supports *split operation* -- Beancount files in one VM (the client), receipts and AI access in other VMs (the servers).  In this mode, `beanhand` runs on the qube that has your Beancount files, and talks to two separate server programs through Qrexec communication channels targeting other VMs:
+
+* **`beanhand-documents-server`** — lists, fetches, and removes receipts. It needs the `documents` section of the config.
+* **`beanhand-ai-server`** — talks to the LLM. It needs the `ai` section of the config. It never touches the receipt storage: when an operation needs a document, the client fetches it from the documents server and relays it to the AI server over the connection's standard input.
+
+The two servers may live on **up to three** different VMs: both locally (single-VM setup), together on one server VM (two-VM setup, as before), or on two separate server VMs (three-VM setup, e.g. `pim-docs` for receipts and `pim-ai` for the LLM).
 
 To enable this mode of operation:
 
-1. Split your configuration so that client VM only has the `beancount` section, and the server VM has the `documents` and `ai` sections.  The Beancount ledger stays in the client.
-2. Ensure both client and server VMs have this program installed.  Remember there are [pre-built Fedora RPMs](https://repo.rudd-o.com/) of the `python3-beanhand` package and all its dependencies.
-3. Deploy the service files in the `qubes-rpc` folder to `/etc/qubes-rpc` of your server VM.  Depending on where `beanhand-server` is installed, you may have to adjust the paths in those files.  Ensure all service files are executable.  There [pre-built Fedora RPMs](https://repo.rudd-o.com/) named `python3-beanhand-qubes-rpc` that will install these files for you.
-4. Add a `target_vm` key in the client configuration, naming the server VM.
-5. Allow the client VM access to the Qubes RPC services you deployed.  In the following example, the `pim` VM is the server, and the `financial` VM is the client:
+1. Split your configuration so that the client VM has the `beancount` section, and give each server the section it needs: the `documents` section to the documents server, the `ai` section to the AI server.  The Beancount ledger stays in the client.
+2. Ensure all VMs have this program installed.  Remember there are [pre-built Fedora RPMs](https://repo.rudd-o.com/) of the `python3-beanhand` package and all its dependencies.
+3. Deploy the service files (as executables) in the `qubes-rpc` folder to `/etc/qubes-rpc` of each server VM — the files `beanhand.ListUningested`, `beanhand.ListUnassociated`, `beanhand.Fetch` and `beanhand.Remove` on the documents server, and the files `beanhand.Process`, `beanhand.HelpAssociateReceipt` and `beanhand.Refine` on the AI server.  Depending on where the server programs are installed, you may have to adjust the paths in those files.  Ensure all service files are executable.  There [pre-built Fedora RPMs](https://repo.rudd-o.com/) named `python3-beanhand-qubes-rpc` that will install these files for you.
+4. Address each server from the client configuration with a `vm` key under its role's section: `"documents": { "vm": "<docs vm>" }` for the documents server and `"ai": { "vm": "<ai vm>" }` for the AI server (name them `backend: "qubes"` explicitly if you prefer). To run a server on the client VM itself, keep its section but give it no `vm` key (an empty object, e.g. `"documents": {}`, works — the server is then spawned locally as a subprocess). Note that the `documents` and `ai` sections must both be present in the *client* config even when only their `vm` keys matter; each server VM's own config carries only the section it needs.
+5. Allow the client VM access to the Qubes RPC services you deployed.  In the following example, the `docs` VM stores the receipts, the `ai` VM hosts the LLM, and the `financial` VM is the client:
 
 ```
 # You'd put this e.g. in file /etc/qubes/policy.d/99-beanhand.policy
 # of your dom0 in your Qubes OS installation.
-beanhand.ListUningested * financial pim allow
-beanhand.ListUnassociated * financial pim allow
-beanhand.Process * financial pim allow
-beanhand.Fetch * financial pim allow
-beanhand.Remove * financial pim allow
-beanhand.HelpAssociateReceipt * financial pim allow
-beanhand.Refine * financial pim allow
+beanhand.ListUningested * financial docs allow
+beanhand.ListUnassociated * financial docs allow
+beanhand.Fetch * financial docs allow
+beanhand.Remove * financial docs allow
+beanhand.Process * financial ai allow
+beanhand.HelpAssociateReceipt * financial ai allow
+beanhand.Refine * financial ai allow
 ```
 
-If you did everything right, `beanhand list-unassociated` should show you your unassociated receipts, and everything else will work fine.
+Here is a sample configuration for your client VM:
+
+```json
+{
+  "beancount": {
+    "main_file": "/home/user/Documents/Accounting/main.beancount",
+    "ingestion_destination_file": "imported.beancount"
+  },
+  "ai": {
+    "vm": "llmvm"
+  },
+  "documents": {
+    "vm": "documents_vm"
+  }
+}
+```
+
+The server VM(s) should get their own `ai` and `documents` sections (respectively) as per the configuration reference above.
+
+If you did everything right, `beanhand list-unassociated` on the client should show you your unassociated receipts, and everything else will work fine.
 
 ### Overriding configuration
 
