@@ -43,7 +43,7 @@ Additionally:
 
 ## 6. Client-side receipt file handling
 
-It should be possible for the client to operate on arbitrary local receipts for the most part, not just receipts known to the server in the unassociated or uningested folders.
+It should be possible for the client to operate on arbitrary local receipts for the most part, not just receipts known to the server in the unassociated or uningested folders.  See *Client-side receipts.md* spec file.
 
 ## 7. Code quality
 
