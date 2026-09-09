@@ -8,6 +8,8 @@ All commands rely on configuration parameters, documented in `README.md`.
 
 Runs on the machine with Beancount data. Abstracts away the transport layer entirely — it talks to `beanhand-documents-server` and `beanhand-ai-server` via qrexec or local subprocesses (one per server, each of which may target a different VM).  When an AI operation needs a receipt, the client fetches it from the documents server and relays it to the AI server over the connection's standard input.
 
+Receipt-taking commands (`process`, `import`, `ingest`, `associate`, `organize`) also accept a **path to a file on the client's own filesystem**, so you can feed a scanned receipt straight from your disk without first pushing it into the documents store: a path (or a bare name with a receipt extension that exists in the working directory) that exists locally is read directly and makes zero documents-server calls. When an argument is not such a local file it is a documents-store filename and is resolved through the server, exactly as before.
+
 ### Options
 
 | Flag | Description |
@@ -24,19 +26,44 @@ Runs on the machine with Beancount data. Abstracts away the transport layer enti
 
 ### Receipt import and ingestion
 
+Each receipt argument is a **documents-store filename *or* a path to a local file**.
+A path that exists on the client's filesystem (e.g. `scans/2026-01-01.jpg`,
+`/abs/x.pdf`) is read directly and is never sent to the documents server; a bare
+name (no path separator) is treated as a store filename, *unless* a file with a
+receipt extension (`.jpg`, `.jpeg`, `.png`, `.pdf`) of the same name sits in the
+current working directory, in which case it is read locally. A bare name that is
+not a plausible local receipt is a store filename exactly as before (so existing
+store-based workflows are byte-for-byte unchanged).
+
 | Command | Flags | Arguments | Description |
 |---|---|---|---|
-| `beanhand ingest` | `[--yes \| --no]` | `[<filename>]` | Process all uningested receipts. Without filenames, processes everything on the server. With filenames, processes only those (they must exist). Interactive: prompts `y/n/p/q` for each receipt (`p` previews in your image / PDF viewer, `q` aborts). With `--yes`: auto-import. With `--no`: do all work but don't touch files (dry run). |
-| `beanhand import <filename>` | — | — | Full pipeline for a single receipt (fetch → LLM → organize → append). Leaves the receipt on the server instead of deleting it. |
+| `beanhand ingest` | `[--yes \| --no]` | `[<filename>]` | Process all uningested receipts. Without filenames, processes everything on the server. With filenames, processes only those (a local path that does not exist fails fast, before any LLM call). Interactive: prompts `y/n/p/q` for each receipt (`p` previews in your image / PDF viewer, `q` aborts). With `--yes`: auto-import. With `--no`: do all work but don't touch files (dry run). On success, each receipt is consumed from its source: a store receipt is removed from the server, a local source file is moved into the account folder (see below). |
+| `beanhand import <filename>` | — | — | Full pipeline for a single receipt (fetch → LLM → organize → append). Leaves the receipt on its source instead of deleting it: a store receipt is left in the store, a local source file is left in place. |
 
 ### Receipt organization and management
 
 | Command | Arguments | Description |
 |---|---|---|
-| `beanhand process <filename>` | `<filename>` | Extract transaction data via LLM. Prints Beancount tx to stdout, `Main account: <account>` to stderr. |
-| `beanhand organize <filename> <date> <account>` | `<filename> <YYYY-MM-DD> <account>` | Download a receipt and file it under `<beancount_folder>/<account_with_slashes>/`. Useful when you already know the data. Filename format: `<date>.<original_filename>`. |
-| `beanhand fetch <filename> <destination>` | `<filename> <local_path>` | Download a receipt from the server to a local path. Tries ingestion URL first, then association URL. |
-| `beanhand remove <filename>` | `<filename>` | Delete a receipt from the server (tries ingestion URL first, association second). Exit code 0 on success, 1 on failure. |
+| `beanhand process <filename>` | `<filename>` | Extract transaction data via LLM. Prints Beancount tx to stdout, `Main account: <account>` to stderr. Read-only; the receipt is read from its source (local file or store) and never modified. |
+| `beanhand organize <filename> <date> <account>` | `<filename> <YYYY-MM-DD> <account>` | File a copy of the receipt under `<beancount_folder>/<account_with_slashes>/`. Useful when you already know the data. Filename format: `<date>.<original_filename>`. The source (local file or store receipt) is read but left in place. |
+| `beanhand fetch <filename> <destination>` | `<filename> <local_path>` | Download a receipt from the server to a local path. Tries ingestion URL first, then association URL. (Store-only; a local path would just be a `cp`.) |
+| `beanhand remove <filename>` | `<filename>` | Delete a receipt from the server (tries ingestion URL first, association second). Exit code 0 on success, 1 on failure. (Store-only; there is nothing local to remove.) |
+
+### Consuming a receipt on success (D4)
+
+A successful `ingest` / `associate` consumes the receipt from wherever it came
+from, so the "process → file → done" contract is identical for both sources:
+
+| Command | Store receipt | Local receipt | `--no` / `n` (skip) |
+|---|---|---|---|
+| `ingest` | `Remove` from the server (existing behavior; rolls back the import on failure) | **moved** into the account folder: the organized copy retains the source's mtime, then the source is deleted (rolls back on failure) | never — nothing written, nothing removed |
+| `associate` | `Remove` from the server | **moved** into the account folder, as above | never |
+| `import` | unchanged — never deleted | unchanged — never deleted | n/a |
+| `process` | unchanged — read-only | unchanged — read-only | n/a |
+
+`import` and `process` never delete (they never did). Under `--no` (and an `n`
+at the prompt), no file is modified anywhere: the local source is only read, no
+Beancount file is written, no copy is filed, and no `Remove` is issued.
 
 ### Receipt association
 
@@ -44,7 +71,7 @@ Link a receipt to an existing Beancount transaction (for receipts from banks/mer
 
 | Command | Flags | Arguments | Description |
 |---|---|---|---|
-| `beanhand associate` | `[--yes \| --no]` | `[<filename>]` | Associate one or more receipts with existing transactions. Without filenames, processes all unassociated receipts. With filenames, processes only those (they must exist). The flow: (1) LLM extracts date + amount from receipt; (2) queries Beancount for candidates within 1 day before to 45 days after receipt date; (3) LLM ranks candidates by match probability; (4) if unambiguous (score ≥ 0.8), auto-selects the top match; (5) inserts `document:` metadata on the transaction line (newest doc first, older docs renamed to `document2:`, `document3:`, etc.); (6) saves receipt under the appropriate account folder and removes it from WebDAV. With `--yes`: confirm all actions automatically. With `--no`: print diff only, skip writes. |
+| `beanhand associate` | `[--yes \| --no]` | `[<filename>]` | Associate one or more receipts with existing transactions. Without filenames, processes all unassociated receipts. With filenames, processes only those (a local path that does not exist fails fast, before any LLM call). The flow: (1) LLM extracts date + amount from receipt; (2) queries Beancount for candidates within 1 day before to 45 days after receipt date; (3) LLM ranks candidates by match probability; (4) if unambiguous (score ≥ 0.8), auto-selects the top match; (5) inserts `document:` metadata on the transaction line (newest doc first, older docs renamed to `document2:`, `document3:`, etc.); (6) saves receipt under the appropriate account folder and consumes it from its source (store: `Remove`; local file: moved). With `--yes`: confirm all actions automatically. With `--no`: print diff only, skip writes. |
 
 ### Refining existing transactions
 

@@ -8,6 +8,7 @@ from beanhand.server.documents.backends import (
     make_receipt_backend,
 )
 from beanhand.server.documents.config import Configuration
+from beanhand.structs import FILE_NOT_FOUND_ERROR
 
 
 def run(cfg: Configuration, args: argparse.Namespace) -> None:
@@ -22,6 +23,10 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
     except ResourceNotFoundError:
         try:
             fetched = make_receipt_backend(cfg, "unassociated").read(receipt_path)
+        except ResourceNotFoundError:
+            meta = json.dumps({"error": FILE_NOT_FOUND_ERROR})
+            sys.stdout.buffer.write(meta.encode("utf-8") + b"\n")
+            sys.exit(1)
         except Exception as e:
             print(f"error: cannot read {fn}: {e}", file=sys.stderr)
             sys.exit(1)

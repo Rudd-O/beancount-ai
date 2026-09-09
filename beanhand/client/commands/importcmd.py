@@ -19,6 +19,7 @@ from beanhand.client.config import (
     Configuration,
 )
 from beanhand.client.display import print_diff
+from beanhand.client.receipts import ReceiptRef
 from beanhand.client.server.ai import (
     AIClient,
 )
@@ -45,10 +46,10 @@ class ImportResult:
 
     def __init__(
         self,
-        documents_vm: DocumentsClient,
         ai_vm: AIClient,
         beancount: BeancountConfiguration,
         filename: str,
+        fetched_receipt: FetchedReceipt,
     ) -> None:
         # Snapshot the ingestion file up front, before the (slow) LLM call, so
         # that edits made while we process the receipt are detected at commit.
@@ -57,7 +58,9 @@ class ImportResult:
         dest = beancount.ingestion_destination_path
         self._ingestion_guard = FileGuard.take(dest)
 
-        self.fetched_receipt = documents_vm.fetch_receipt(filename)
+        # The receipt bytes are already loaded by the caller (``ReceiptRef.load``),
+        # so neither a local file nor the documents server is touched here.
+        self.fetched_receipt = fetched_receipt
 
         resp = ai_vm.process_receipt(
             filename,
@@ -197,11 +200,16 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:
 
     Exits on success, and if errors are encountered, exits with a non-zero error code.
     """
+    ref = ReceiptRef.resolve([args.filename])[0]
+    # A local receipt makes zero documents-server calls: the client is
+    # constructed anyway but never contacted when the receipt is local.
+    documents_vm = DocumentsClient.from_cfg(cfg)
+    fetched = ref.load(documents_vm)
     result = ImportResult(
-        DocumentsClient.from_cfg(cfg),
         AIClient.from_cfg(cfg),
         cfg.beancount,
-        args.filename,
+        ref.filename,
+        fetched,
     )
 
     diff = result.diff()
@@ -221,5 +229,7 @@ def subcommand_parser(
         "import",
         help="Like ingest, but receipt in server is left alone instead of deleted",
     )
-    imp_cmd.add_argument("filename", help="Filename of the receipt")
+    imp_cmd.add_argument(
+        "filename", help="Receipt store filename or path to a local file"
+    )
     return sp

@@ -54,11 +54,17 @@ class DocumentsClient(ServerTransport):
         stdin.close()
 
         try:
-            return FetchedReceipt.load(stdout)
-        finally:
+            fetched = FetchedReceipt.load(filename, stdout)
+        except Exception:
             ret = proc.wait()
-            if ret != 0:
-                raise subprocess.CalledProcessError(ret, cmd)
+            raise
+
+        ret = proc.wait()
+        if ret != 0:
+            raise subprocess.CalledProcessError(ret, cmd)
+
+        fetched.filename = filename
+        return fetched
 
     def remove_receipt(self, filename: str) -> None:
         cmd, proc, stdin, _ = self._call("beanhand.Remove", arg=filename)
@@ -88,7 +94,13 @@ def open_document(dest_path: Path) -> None:
     )
 
 
-def preview_receipt(vm: DocumentsClient, filename: str, preview_dir: Path) -> None:
-    dest_path = preview_dir / filename
-    save_receipt(dest_path, vm.fetch_receipt(filename))
+def preview_receipt(fetched: FetchedReceipt, preview_dir: Path) -> None:
+    """Write the already-loaded receipt to *preview_dir* and open it there.
+
+    The caller passes the ``FetchedReceipt`` it already holds, so no second
+    fetch (from the store or the local file) is made.  The filename is derived
+    from the file's content when absent, so the signature stays minimal.
+    """
+    dest_path = preview_dir / fetched.filename
+    save_receipt(dest_path, fetched)
     open_document(dest_path)

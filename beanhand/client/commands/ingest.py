@@ -10,6 +10,11 @@ from beanhand.client.commands import remove
 from beanhand.client.commands.importcmd import ImportResult
 from beanhand.client.config import Configuration
 from beanhand.client.display import print_diff
+from beanhand.client.receipts import (
+    ReceiptRef,
+    Source,
+    maybe_warn_collision,
+)
 from beanhand.client.server.ai import (
     AIClient,
 )
@@ -29,34 +34,49 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
     """
     vm = DocumentsClient.from_cfg(cfg)
     ai_vm = AIClient.from_cfg(cfg)
-    receipts = vm.list_receipts("uningested")
 
+    # With filenames, each argument resolves independently (a local path or a
+    # store name); a local path that does not exists fails fast, before any LLM
+    # or transport call.  A store name is no longer pre-checked against the
+    # listing — the fetch during processing is the single source of truth.
+    # Without filenames, the batch is the store's uningested queue (all STORE).
+    # ``resolve`` of a list resolves each argument and de-duplicates (D7) in one
+    # step, so a receipt named more than once is processed exactly once.
     if args.filename:
-        for fn in args.filename:
-            if fn not in receipts:
-                print(f"Receipt {fn} does not exist on server.", file=sys.stderr)
-                sys.exit(1)
-        # All specified receipts exist on the server.  Let's override
-        # the list with what the user sent us.
-        receipts = args.filename
+        refs = ReceiptRef.resolve(args.filename)
+    else:
+        refs = ReceiptRef.resolve(vm.list_receipts("uningested"))
 
-    if not receipts:
+    if not refs:
         print("No receipts to ingest.", file=sys.stderr)
         return
 
-    def do_ingest_one(receipt: str, preview_dir: Path) -> None:  # noqa: C901
+    def do_ingest_one(ref: ReceiptRef, preview_dir: Path) -> None:  # noqa: C901
+        # Load the receipt's bytes (local read or store fetch).  A local file
+        # that vanished between resolution and read surfaces here, before any
+        # AI call (most commonly because an earlier receipt in this run moved it).
+        try:
+            fetched = ref.load(vm)
+        except FileNotFoundError:
+            raise Exception(
+                f"Import of {ref.arg} failed: file not found "
+                "(already processed earlier in this run?)"
+            ) from None
+
+        maybe_warn_collision(vm, "uningested", ref.arg, ref)
+
         # Attempt the import.
         try:
-            imp = ImportResult(vm, ai_vm, cfg.beancount, receipt)
+            imp = ImportResult(ai_vm, cfg.beancount, ref.filename, fetched)
         except Exception as e:
-            raise Exception(f"Import of {receipt} failed: {e}") from e
+            raise Exception(f"Import of {ref.arg} failed: {e}") from e
 
         # Show a diff.
         diff = imp.diff()
         if diff:
             print_diff(diff)
         else:
-            print(f"No changes to {args.filename}", file=sys.stderr)
+            print(f"No changes to {ref.arg}", file=sys.stderr)
             return
 
         if args.yes:
@@ -67,7 +87,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
             action = "skip"
             while True:
                 print(
-                    f"\nImport proposed transaction based on '{receipt}'? [y]es / [n]o / [p]review receipt / [q]uit ",
+                    f"\nImport proposed transaction based on '{ref.arg}'? [y]es / [n]o / [p]review receipt / [q]uit ",
                     file=sys.stderr,
                     end="",
                 )
@@ -80,7 +100,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
                     sys.exit(0)
 
                 if answer == "p":
-                    preview_receipt(vm, receipt, preview_dir)
+                    preview_receipt(fetched, preview_dir)
                     continue  # re-prompt for the same receipt
 
                 if answer == "y":
@@ -99,34 +119,53 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
             try:
                 imp.commit()
             except Exception as e:
-                raise Exception(f"Commit of imported {receipt} failed: {e}") from e
+                raise Exception(f"Commit of imported {ref.arg} failed: {e}") from e
 
-            # Remove from the server only after successful import.
-            try:
-                remove.run(cfg, argparse.Namespace(filename=receipt))
-            except Exception as e:
+            # Consume the receipt from wherever it came from, only after a
+            # successful import: a store receipt is removed from the server, a
+            # local source file is moved into the account folder (its organized
+            # copy was already written by commit, with the source's mtime).
+            if ref.src is Source.STORE:
                 try:
-                    # At this point, we have the transaction written and the receipt
-                    # saved locally, but the receipt could not be deleted remotely,
-                    # so it is safe to roll back without data loss.  Since the receipt
-                    # is still on the server side, we can retry reimporting the same
-                    # receipt later.
-                    imp.rollback()
-                except Exception as ee:
-                    raise Exception(
-                        f"Could not roll back transaction of imported {receipt}: {ee}"
-                    ) from ee
-                raise Exception(f"Could not remove {receipt} from folder: {e}") from e
+                    remove.run(cfg, argparse.Namespace(filename=ref.filename))
+                except Exception as e:
+                    try:
+                        # At this point, we have the transaction written and the
+                        # receipt saved locally, but the receipt could not be
+                        # deleted remotely, so it is safe to roll back without
+                        # data loss.  Since the receipt is still on the server
+                        # side, we can retry reimporting the same receipt later.
+                        imp.rollback()
+                    except Exception as ee:
+                        raise Exception(
+                            f"Could not roll back transaction of imported {ref.arg}: {ee}"
+                        ) from ee
+                    raise Exception(f"Could not remove {ref.arg} from folder: {e}") from e
+            else:
+                try:
+                    ref.path.unlink()
+                except Exception as e:
+                    # The organized copy was written, but the source could not be
+                    # removed; roll back (deleting the newly filed copy and
+                    # restoring the ledger) so the user's original survives for a
+                    # clean re-run of the same command.
+                    try:
+                        imp.rollback()
+                    except Exception as ee:
+                        raise Exception(
+                            f"Could not roll back transaction of imported {ref.arg}: {ee}"
+                        ) from ee
+                    raise Exception(f"Could not remove {ref.arg}: {e}") from e
 
     with tempfile.TemporaryDirectory() as tmpdir:
         preview_dir = Path(tmpdir)
 
         exceptions: list[tuple[str, Exception]] = []
-        for receipt in receipts:
+        for ref in refs:
             try:
-                do_ingest_one(receipt, preview_dir)
+                do_ingest_one(ref, preview_dir)
             except Exception as e:
-                exceptions.append((receipt, e))
+                exceptions.append((ref.arg, e))
                 if args.yes or args.no:
                     print(f"{e} — continuing to next receipt", file=sys.stderr)
                 else:
@@ -152,7 +191,7 @@ def subcommand_parser(
     )
     ing_cmd.add_argument(
         "filename",
-        help="One or more receipt filenames (if none are present, all are processed)",
+        help="One or more receipt filenames (documents store) or paths to local files (if none are present, all store receipts are processed)",
         nargs="*",
     )
     yes_group = ing_cmd.add_mutually_exclusive_group()

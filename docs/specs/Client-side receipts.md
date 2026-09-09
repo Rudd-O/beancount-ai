@@ -54,8 +54,8 @@ An argument naming a file that exists on the client's filesystem is treated as a
 resolved through the documents server, exactly as today.
 
 *Detection rule.* Let `arg` be the argument as received (i.e., already
-shell-expanded by the caller's shell). The argument is **local** when, after
-`os.path.expanduser`, one of the following holds:
+shell-expanded by the caller's shell). The argument is **local** when one of the
+following holds:
 
 - it contains a path separator (`os.sep`), or is `.` or `..` — i.e. it is
   path-like; **and** `os.path.lexists(path)` is true with
@@ -112,6 +112,9 @@ so the escape is operational: re-run from a directory that does not contain a
 same-named file and the same invocation takes the store copy. This is an
 accepted, documented trade-off, made recoverable by the notice.
 
+*We never `os.path.expanduser(argument)`.*  That is the job of the shell that
+the user uses to invoke our program.
+
 ### D2 — A single `ReceiptRef` abstraction
 
 The local/store decision is implemented **once** and shared by
@@ -128,7 +131,7 @@ class Source(Enum):
 class ReceiptRef:
     src: Source                    # where the bytes come from
     arg: str                       # verbatim CLI argument
-    path: Path                     # LOCAL: the resolved path (expanduser'd); STORE: Path(basename)
+    path: Path                     # LOCAL: the resolved path; STORE: Path(basename)
     filename: str                  # basename; drives naming, extension, and the AI payload
 
     def load(self, documents: DocumentsClient) -> FetchedReceipt:
@@ -136,7 +139,7 @@ class ReceiptRef:
         # STORE: documents.fetch_receipt(self.filename)
 ```
 
-- `filename` is `os.path.expanduser(arg)`'s basename in **both** sources. The
+- `filename` is `arg`'s basename in **both** sources. The
   store path's argument already is a bare basename (the server's
   `beanhand.Fetch` itself `basename`s its argument,
   `beanhand/server/documents/commands/fetch.py:14`), so local and store receipts
@@ -295,8 +298,47 @@ Two distinct notions that must not be conflated:
 - *documents-server storage backend* (`documents.backend: "local"` or
   `"webdav"` in the **server's** config): the documents *server* reads
   uningested/unassociated folders on its own filesystem or WebDAV store; the
-  client still reaches it via `Fetch`/`List`/`Remove` (qrexec, or the
-  co-located spawn). This already works and is unchanged here.
+   client still reaches it via `Fetch`/`List`/`Remove` (qrexec, or the
+   co-located spawn). This already works and is unchanged here.
+
+### D7 — A batch never contains the same receipt twice
+
+When an argument-bearing batch (`ingest [FILE...]` / `associate [FILE...]`)
+resolves its arguments, the resulting `ReceiptRef` list is **de-duplicated**
+before anything is processed: two arguments that name the same underlying
+receipt collapse to one `ReceiptRef` (first seen wins, order preserved).
+
+*Key.* De-duplication is by the receipt's identity, which differs by source:
+
+- a **local** receipt is keyed by its *resolved real path*
+  (`Path.resolve()` of the argument): the same physical file,
+  given by a relative name, an absolute path, a `./`-prefixed name, or any
+  spellings of either in the CWD, all collapse to one; and
+- a **store** receipt is keyed by its *filename*: naming the same store
+  filename twice collapses to one.
+
+A `Source` prefix keeps the two universes apart: a local file named `r.pdf`
+and a store receipt named `r.pdf` are **distinct** receipts and are not
+collapsed into each other.
+
+*Rationale.* After a successful `ingest` / `associate`, a receipt is consumed
+from its source (D4): a local file is moved, a store receipt is removed. If the
+same receipt appeared twice in one batch, the first pass would consume it and
+the second would merely fail its `load()` (local) or its `Fetch` (store),
+producing a spurious error at the end of an otherwise-successful run.
+De-duplicating up front makes "name a receipt twice" equivalent to "name it
+once": it is read, processed, committed, and consumed exactly once, which is
+what the user intends.
+
+Implementation: `ReceiptRef.dedup_key()` returns that identity. De-duplication
+lives in the resolution itself rather than in the callers, so a batch can never
+name a receipt twice: `ReceiptRef.resolve(args: list[str]) -> list[ReceiptRef]`
+resolves each element and returns the de-duplicated collapse in first-seen order
+(`ReceiptRef._dedupe`, keyed on `dedup_key`). A single-receipt command (
+`process` / `import` / `organize`) simply passes a one-element list and takes the
+sole result; the batch commands call `ReceiptRef.resolve(args.filename)` (or
+`resolve(vm.list_receipts(...))` for the no-argument store-queue path, whose
+elements are already unique filenames and de-dup as a no-op).
 
 ## Governing rule
 
@@ -312,22 +354,23 @@ work); its wire protocol does not change and carries the bytes either way.
 
 ### `beanhand process <file>`
 
-`ref = ReceiptRef.resolve(args.filename)`; `fetched = ref.load(documents)`;
+`ref = ReceiptRef.resolve([args.filename])[0]`; `fetched = ref.load(documents)`;
 `ai.process_receipt(args.filename, fetched, accounts)` (unchanged call shape —
 the `AIClient` already inlines `fetched.data` into a `ReceiptPayload`); print the
-transaction + main account as today. For a local receipt the documents server is
-not contacted at all (the `DocumentsClient` is only passed to `load`).
+transaction + main account as today. The `DocumentsClient` is always
+constructed; for a local receipt it is simply never contacted.
 
 ### `beanhand import <file>`
 
-`ref = ReceiptRef.resolve(args.filename)`; `fetched = ref.load(documents)`;
-`ImportResult(documents, ai, cfg.beancount, ref.filename, fetched)`.
+`ref = ReceiptRef.resolve([args.filename])[0]`; `fetched = ref.load(documents)`;
+`ImportResult(ai, cfg.beancount, ref.filename, fetched)`.
 
 `ImportResult.__init__` changes signature: it receives the **already-loaded**
-`FetchedReceipt` instead of fetching it itself (`importcmd.py:60` today). The
-`DocumentsClient` parameter is retained (callers pass it; it is no longer used
-inside `ImportResult` — dropping it is churn, keeping it keeps the constructor
-call sites symmetric with `ingest`'s). Everything else in `ImportResult`
+`FetchedReceipt` instead of fetching it itself (`importcmd.py:60` today), and it
+takes **no** `DocumentsClient` (the bytes are loaded by the caller via
+`ReceiptRef.load`, and `ImportResult` never needs the store — `commit`/`rollback`
+work on the local filesystem and the already-loaded bytes). Everything else in
+`ImportResult`
 (`diff`/`commit`/`rollback`) is unchanged; `commit` continues to
 `save_receipt(self.receipt_destination_path, self.fetched_receipt)` from the same
 bytes. `import` never deletes from the store (unchanged) and never touches the
@@ -340,13 +383,16 @@ source of a local receipt.
   of unreferenced local files is *not* a queue — D2; there is deliberately no
   "list local receipts" mode; see Out of scope).
 - **With arguments:** replace the current
-  "not in `receipts` → error" pre-check (`ingest.py:36`) with, per argument:
-  `ref = ReceiptRef.resolve(fn)`; a `LOCAL` ref whose file does not exist is an
-  error *before any LLM call* (fail fast, same UX as today's store pre-check);
-  a `STORE` ref is no longer validated against the listing — the fetch during
-  processing is the single source of truth (this also removes a latent TOCTOU
-  mismatch: today the listing and the fetch could disagree; the error messages
-  for a missing store receipt remain the documents server's).
+   "not in `receipts` → error" pre-check (`ingest.py:36`) with
+   `refs = ReceiptRef.resolve(args.filename)`; a `LOCAL` ref whose file does not
+   exist is an error *before any LLM call* (fail fast, same UX as today's store
+   pre-check); a `STORE` ref is no longer validated against the listing — the
+   fetch during processing is the single source of truth (this also removes a
+   latent TOCTOU mismatch: today the listing and the fetch could disagree; the
+   error messages for a missing store receipt remain the documents server's).
+   Resolving a *list* de-duplicates as a side effect (D7), so a receipt named
+   more than once is processed exactly once. The no-argument path likewise calls
+   `resolve(vm.list_receipts("uningested"))`.
 - **Per receipt (`do_ingest_one`):** `fetched = ref.load(documents)` →
   `ImportResult(...)` with those bytes → diff → prompt (`y/n/p/q`) as today;
   the `p` answer previews the **already-loaded** `FetchedReceipt` (D5) and
@@ -382,7 +428,7 @@ confirmed; that is preserved exactly, only the source condition is added.
 
 ### `beanhand organize <file> <date> <account>`
 
-`ref = ReceiptRef.resolve(args.filename)`; `fetched = ref.load(documents)`;
+`ref = ReceiptRef.resolve([args.filename])[0]`; `fetched = ref.load(documents)`;
 `save_receipt(predicted_path, fetched)`; print the destination. No AI call and no
 remove, unchanged otherwise. The change is precisely that step 2 stops being an
 unconditional store fetch (`organize.py:32`).
@@ -419,11 +465,11 @@ server is read-only with respect to storage by construction.
 | Argument that is a directory (or broken symlink) | Error at resolution ("not a regular file" / "broken symlink"), not a fall-through |
 | No arguments (batch), argless `ingest`/`associate` | `documents.List*` is called as today, whether the documents server is reached via qubes or a co-located process; there is no local-directory listing (Out of scope) |
 | Local receipt with an unsupported extension (a path-like arg, since bare names are restricted to receipt extensions by D1) | Bytes reach the AI server; `file_to_image_parts` (`server/llm.py`) applies its existing defaulting/warning exactly as it does today |
-| Mixed local + store arguments in one batch | Each argument resolves independently; per-receipt commit/cleanup is conditional on that receipt's own source (D4); the existing continue-on-error (`--yes`/`--no`) and end-of-run error-summary semantics are unchanged |
+ | Mixed local + store arguments in one batch | Each argument resolves independently; per-receipt commit/cleanup is conditional on that receipt's own source (D4); the existing continue-on-error (`--yes`/`--no`) and end-of-run error-summary semantics are unchanged |
 | Local file deleted between resolution and `load()` | A `FileNotFoundError` is raised, surfaced as an error for that receipt before any AI call (batch: continue-on-error rules apply) |
 | Store `Fetch` fails mid-batch | Propagates as an error for that receipt exactly as today (no local file written, no tx appended, no remove attempted) |
-| Same local file passed twice in one `ingest` batch | The first receipt *moves* the file out of the source path (D4); the second argument then fails its `load()` with `FileNotFoundError` — "file not found: <arg> (already processed earlier in this run?)" — and is reported under the normal per-receipt error handling (a batch with `--yes`/`--no` continues; interactive mode raises). This is the expected consequence of the move semantics: a consumed receipt leaves its source path |
-| Same store filename passed twice in one `ingest` batch | The first receipt removes it from the store; the second receipt's `Fetch` fails with the documents server's existing "Receipt not found" error — the same observable outcome a store receipt has today, so no new behavior |
+| Same local file passed twice in one batch (any spelling) | The batch is de-duplicated on the *resolved* local path (or, for a store receipt, its filename) before any processing (see D7): the second argument is dropped, so the file is read, moved, and committed exactly once. A relative and an absolute spelling of the same file, or a bare name and a `./`-prefixed one in the CWD, all collapse to a single `ReceiptRef`. |
+| Same store filename passed twice in one batch | Dropped by the same de-duplication (keyed on the store filename); fetched and `Remove`d exactly once. |
 | Local source sitting inside the account folder (e.g. scanner directory *is* the account folder) | Works: the destination name always carries the `YYYY-MM-DD.` prefix (+ optional description) prepended to the basename, so it can never equal the source path; the file is simply copied to the prefixed name and the source unlinked (D4) |
  | `--no` with store and local receipts mixed | Reads (`List`/`Fetch`/LLM) may occur; no client file is written and no `Remove` is issued for any receipt (D4) |
 
@@ -450,7 +496,7 @@ Items are grouped by concern; "touches" lists concrete files.
 
 - New `beanhand/client/receipts.py`: the `Source` enum and frozen
   `ReceiptRef` per Decision D2, `ReceiptRef.resolve(arg)` implementing the D1
-  rule (expanduser, separator classification, `VALID_EXTENSIONS` bare-name
+  rule (separator classification, `VALID_EXTENSIONS` bare-name
   gate, lexists/is-file checks returning a specific error for each failure kind),
   `load(documents)`, and the collision-notice helper used when a bare name is
   local while a store listing contains the same name.
@@ -491,9 +537,12 @@ Items are grouped by concern; "touches" lists concrete files.
 
 - `beanhand/tests/test_receipt_ref.py` (new): the D1 matrix — path-like existing
   (absolute, relative, `./`), path-like missing, directory, broken symlink,
-  bare-name extension-gate both ways, expanduser, collision notice emission,
-  `load()` local branch (bytes + mtime preserved) and store branch (mock
-  `DocumentsClient.fetch_receipt`).
+   bare-name extension-gate both ways, collision notice emission,
+   `load()` local branch (bytes + mtime preserved) and store branch (mock
+    `DocumentsClient.fetch_receipt`), and the D7 `resolve(list)` matrix (same
+    store name collapses to one; same local path given under several spellings
+    collapses to one; unrelated receipts are kept; first-seen order preserved; a
+    local and a store receipt sharing a basename are *not* collapsed).
 - Extend `beanhand/tests/test_import_result.py`: constructor now receives a
   `FetchedReceipt`; assert no fetch interaction happens inside `ImportResult`
   (the mock `DocumentsClient` must report zero `fetch_receipt` calls).
@@ -504,11 +553,13 @@ Items are grouped by concern; "touches" lists concrete files.
   no `remove_receipt` call, no documents-client `fetch`/`list`/`remove` at
   all); `--no` + store source → remove never called, no beancount write;
   `--no` + local source → source file still present and unmodified; failed
-  local unlink → `ImportResult.rollback()` invoked (newly filed copy removed,
-  ledger truncated back) and source file intact; source inside the account
-  folder → destination gets the date-prefixed name, source unlinked; same file
-  twice in one batch → first moves, second errors with "file not found";
-  mixed batch → per-receipt independence.
+   local unlink → `ImportResult.rollback()` invoked (newly filed copy removed,
+   ledger truncated back) and source file intact; source inside the account
+   folder → destination gets the date-prefixed name, source unlinked; same file
+   twice in one batch (any spelling) → de-duplicated to one receipt, which is
+   moved/read/committed exactly once (D7); same store filename twice → de-
+   duplicated, fetched and `Remove`d exactly once (D7); mixed batch →
+   per-receipt independence.
  - `organize` / `process` single-receipt tests for the local path (no documents
    client constructed or called) and for a store name (documents client called
    exactly once: the fetch; no remove).

@@ -39,6 +39,7 @@ beanhand/
     │   ├── remove.py                          # beanhand remove
     │   └── organize.py                        # beanhand organize
     ├── config.py                              # client-side configuration
+    ├── receipts.py                             # ReceiptRef: resolve a receipt arg to LOCAL vs STORE (D1/D2)
     ├── beancount_loader.py                    # loads Beancount data (queries / candidate contexts)
     ├── beanfiles.py                           # raw Beancount file ops: tx splitting, doc metadata, receipt organization
     ├── server/                                # one client-side accessor per server program
@@ -73,6 +74,8 @@ to catch further problems with the code.
 - `beanhand process <file>` → streams LLM response, prints parsed Beancount tx to stdout
 - `beanhand refine <file_path> <target>...` → refine one or more transactions using their linked documents; each target is a 1-based line number (N), an inclusive line range (A-B), or an open range to the end of the file (A-end); targets must be strictly ascending and non-overlapping (see docs/specs/Refine multi-range target specification.md)
 - `beanhand ingest` / `import <filename>` / `associate` / `fetch` / `remove` / `organize`
+
+The receipt-taking commands (`process`, `import`, `ingest`, `associate`, `organize`) resolve their receipt argument as a **local file or a store filename** (`beanhand/client/receipts.py`, `ReceiptRef.resolve`): a path that exists on the client (or a bare name with a receipt extension present in the CWD) is read directly with zero documents-server calls; anything else is a store filename fetched through the documents server. On success, `ingest`/`associate` remove a store receipt from the server and move a local source file into the account folder (see docs/specs/Client-side receipts.md).
 
 Default config: `~/.config/beanhand.json`. All three programs support `--config <path>` and `$BEANHAND_CONFIG`.
 

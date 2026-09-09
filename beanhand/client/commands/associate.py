@@ -25,6 +25,11 @@ from beanhand.client.beanfiles import (
 )
 from beanhand.client.config import Configuration
 from beanhand.client.display import print_diff
+from beanhand.client.receipts import (
+    ReceiptRef,
+    Source,
+    maybe_warn_collision,
+)
 from beanhand.client.server.ai import (
     AIClient,
     demarkdownify,
@@ -51,27 +56,40 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
     """
     doc_vm = DocumentsClient.from_cfg(cfg)
     ai_vm = AIClient.from_cfg(cfg)
-    receipts = doc_vm.list_receipts("unassociated")
 
+    # With filenames, each argument resolves independently (a local path or a
+    # store name); a local path that does not exist fails fast, before any LLM
+    # or transport call.  A store name is no longer pre-checked against the
+    # listing — the fetch during processing is the single source of truth.
+    # Without filenames, the batch is the store's unassociated queue (all STORE).
+    # ``resolve`` of a list resolves each argument and de-duplicates (D7) in one
+    # step, so a receipt named more than once is processed exactly once.
     if args.filename:
-        for fn in args.filename:
-            if fn not in receipts:
-                print(f"Receipt {fn} does not exist on server.", file=sys.stderr)
-                sys.exit(1)
-        # All specified receipts exist on the server.  Let's override
-        # the list with what the user sent us.
-        receipts = args.filename
+        refs = ReceiptRef.resolve(args.filename)
+    else:
+        refs = ReceiptRef.resolve(doc_vm.list_receipts("unassociated"))
 
-    if not receipts:
+    if not refs:
         print("No receipts to associate.", file=sys.stderr)
         return
 
-    def do_associate_one(receipt: str, preview_dir: Path) -> None:  # noqa: C901
-        fetched = doc_vm.fetch_receipt(receipt)
+    def do_associate_one(ref: ReceiptRef, preview_dir: Path) -> None:  # noqa: C901
+        # Load the receipt's bytes (local read or store fetch).  A local file
+        # that vanished between resolution and read surfaces here, before any
+        # AI call (most commonly because an earlier receipt in this run moved it).
+        try:
+            fetched = ref.load(doc_vm)
+        except FileNotFoundError:
+            raise Exception(
+                f"Association of {ref.arg} failed: file not found "
+                "(already processed earlier in this run?)"
+            ) from None
+
+        maybe_warn_collision(doc_vm, "unassociated", ref.arg, ref)
 
         # Step 1: Process the receipt via LLM (existing flow).
         try:
-            cmd, proc, stdin, stdout = ai_vm.help_associate_receipt(receipt, fetched)
+            cmd, proc, stdin, stdout = ai_vm.help_associate_receipt(ref.filename, fetched)
         except subprocess.CalledProcessError as e:
             raise Exception(f"Error processing receipt: {e}") from e
 
@@ -133,7 +151,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
 
         matches = resp.get("matches", [])
         if not matches:
-            print(f"No valid matches found for receipt {receipt}.", file=sys.stderr)
+            print(f"No valid matches found for receipt {ref.arg}.", file=sys.stderr)
             return
 
         # Step 4 & 5: Interpret results.
@@ -230,7 +248,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
         receipt_path = predict_receipt_destination_path(
             cfg.beancount.main_folder,
             receipt_date,
-            receipt,
+            ref.filename,
             selected_tx.crediting_account,
             description=description,
         )
@@ -287,7 +305,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
         if not args.no and not args.yes:
             while True:
                 print(
-                    f"\nSave proposed changes to '{tx_file}' and import {receipt}? [y]es / [n]o / [p]review receipt / [q]uit ",
+                    f"\nSave proposed changes to '{tx_file}' and import {ref.arg}? [y]es / [n]o / [p]review receipt / [q]uit ",
                     file=sys.stderr,
                     end="",
                 )
@@ -300,7 +318,7 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
                     sys.exit(0)
 
                 if answer == "p":
-                    preview_receipt(doc_vm, receipt, preview_dir)
+                    preview_receipt(fetched, preview_dir)
                     continue  # re-prompt for the same receipt
 
                 if answer != "y":
@@ -331,17 +349,25 @@ def run(cfg: Configuration, args: argparse.Namespace) -> None:  # noqa: C901
             f"Updated document metadata on line {line_no} of {tx_file}", file=sys.stderr
         )
 
-        doc_vm.remove_receipt(receipt)
+        # Consume the receipt from wherever it came from.  A store receipt is
+        # removed from the server; a local source file is moved into the account
+        # folder (its organized copy was just written, with the source's mtime).
+        # associate writes iff not --no and the match was confirmed, which is
+        # exactly where we are, so no further gating is needed.
+        if ref.src is Source.STORE:
+            doc_vm.remove_receipt(ref.filename)
+        else:
+            ref.path.unlink()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         preview_dir = Path(tmpdir)
 
         exceptions: list[tuple[str, Exception]] = []
-        for receipt in receipts:
+        for ref in refs:
             try:
-                do_associate_one(receipt, preview_dir)
+                do_associate_one(ref, preview_dir)
             except Exception as e:
-                exceptions.append((receipt, e))
+                exceptions.append((ref.arg, e))
                 if args.yes or args.no:
                     print(f"{e} — continuing to next receipt", file=sys.stderr)
                 else:
@@ -366,7 +392,7 @@ def subcommand_parser(
     )
     assoc_cmd.add_argument(
         "filename",
-        help="One or more receipt filename (if none are present, all are processed)",
+        help="One or more receipt filenames (documents store) or paths to local files (if none are present, all store receipts are processed)",
         nargs="*",
     )
     yes_group = assoc_cmd.add_mutually_exclusive_group()

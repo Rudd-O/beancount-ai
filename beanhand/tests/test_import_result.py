@@ -29,6 +29,8 @@ SAMPLE_TX_TEXT: str = (
 
 SAMPLE_RECEIPT_DATA: bytes = b"%PDF-1.4 fake receipt content\r\n"
 
+SAMPLE_FETCHED: FetchedReceipt = FetchedReceipt(SAMPLE_RECEIPT_DATA, 1700000000.5)
+
 
 # ===========================================================================
 # Helpers
@@ -82,6 +84,7 @@ def _make_vm(
     tx: str | None = None,
     *,
     timestamp: float = 1700000000.5,
+    filename: str = "",
 ) -> mock.MagicMock:
     """Return a mocked server VM (documents + AI are the same mock).
 
@@ -89,7 +92,7 @@ def _make_vm(
     tests get a clean transaction and do not need to re-implement comment-stripping.
     """
     vm = mock.MagicMock()
-    vm.fetch_receipt.return_value = FetchedReceipt(receipt_content, timestamp)
+    vm.fetch_receipt.return_value = FetchedReceipt(receipt_content, timestamp, filename)
     if tx is None:
         tx = SAMPLE_TX_TEXT
     vm.process_receipt.return_value = ProcessResponse(tx, "Expenses:Food")
@@ -104,7 +107,7 @@ def _make_vm(
 class TestFormattedTransactionText:
     @pytest.fixture(autouse=True)
     def _build_result(self, bc: BeancountConfiguration) -> None:
-        result = ImportResult(_make_vm(), _make_vm(), bc, "test-001.pdf")
+        result = ImportResult(_make_vm(), bc, "test-001.pdf", SAMPLE_FETCHED)
         self.result: ImportResult = result
 
     def test_with_trailing_newline(self) -> None:
@@ -124,17 +127,23 @@ class TestFormattedTransactionText:
 
 
 class TestInitCalls:
-    def test_fetches_receipt(self, bc: BeancountConfiguration) -> None:
-        vm: mock.MagicMock = _make_vm(receipt_content=SAMPLE_RECEIPT_DATA)
+    def test_does_not_fetch_receipt_itself(self, bc: BeancountConfiguration) -> None:
+        """ImportResult receives an already-loaded receipt; it never fetches.
 
-        ImportResult(vm, vm, bc, "invoice-92.pdf")
+        The bytes come from the caller (``ReceiptRef.load``), so the documents
+        client must see zero ``fetch_receipt`` calls inside ``ImportResult`` — a
+        local receipt makes no documents-server contact at all.
+        """
+        vm: mock.MagicMock = _make_vm(receipt_content=SAMPLE_RECEIPT_DATA, filename="invoice-92.pdf")
 
-        vm.fetch_receipt.assert_called_once_with("invoice-92.pdf")
+        ImportResult(vm, bc, "invoice-92.pdf", vm.fetch_receipt.return_value)
+
+        vm.fetch_receipt.assert_not_called()
 
     def test_passes_account_list(self, bc: BeancountConfiguration) -> None:
         vm: mock.MagicMock = _make_vm()
 
-        ImportResult(vm, vm, bc, "any.pdf")
+        ImportResult(vm, bc, "any.pdf", SAMPLE_FETCHED)
 
         args = vm.process_receipt.call_args[0]
         # the fetched receipt (same content that fetch returned) is relayed.
@@ -157,7 +166,7 @@ class TestInitCalls:
         ingest.unlink()
 
         with pytest.raises(FileNotFoundError):
-            ImportResult(vm, vm, bc, "test.pdf")
+            ImportResult(vm, bc, "test.pdf", SAMPLE_FETCHED)
 
 
 class TestInitStripping:
@@ -166,7 +175,7 @@ class TestInitStripping:
         commented: str = "; reasoning\n\n   \n" + SAMPLE_TX_TEXT
         vm: mock.MagicMock = _make_vm(tx=commented)
 
-        result: ImportResult = ImportResult(vm, vm, bc, "test.pdf")
+        result: ImportResult = ImportResult(vm, bc, "test.pdf", SAMPLE_FETCHED)
         assert result.transaction_text.lstrip().startswith("2025-03-18")
 
 
@@ -174,7 +183,7 @@ class TestInitMetadata:
     def test_injects_document_directive(
         self, tmp_path: pathlib.Path, bc: BeancountConfiguration
     ) -> None:
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
 
         assert "document:" in result.transaction_text
         expected_part: str = str(tmp_path / "Expenses" / "Food")
@@ -186,7 +195,10 @@ class TestInitAttributes:
         self, tmp_path: pathlib.Path, bc: BeancountConfiguration
     ) -> None:
         result: ImportResult = ImportResult(
-            _make_vm(receipt_content=b"CUSTOM"), _make_vm(receipt_content=b"CUSTOM"), bc, "test.pdf"
+            _make_vm(receipt_content=b"CUSTOM", filename="test.pdf"),
+            bc,
+            "test.pdf",
+            FetchedReceipt(b"CUSTOM", 1700000000.5, "test.pdf"),
         )
 
         assert result.fetched_receipt.data == b"CUSTOM"
@@ -197,7 +209,7 @@ class TestInitAttributes:
         assert isinstance(result.ingestion_destination_path, pathlib.Path)
 
     def test_rollback_size_is_none(self, bc: BeancountConfiguration) -> None:
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
         assert result.rollback_size is None
 
 
@@ -215,7 +227,7 @@ class TestDiff:
     ) -> ImportResult:
         # Pre-write the ingest file with *existing_file_content*.
         (tmp_path / "imported.bean").write_text(existing_file_content)
-        return ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        return ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
 
     def test_empty_file_produces_unified_diff(
         self, tmp_path: pathlib.Path, bc: BeancountConfiguration
@@ -260,7 +272,7 @@ class TestDiff:
         self, tmp_path: pathlib.Path, bc: BeancountConfiguration
     ) -> None:
         (tmp_path / "imported.bean").write_text("no trailing newline")
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
         lines: list[str] = result.diff()
         assert len(lines) > 0
 
@@ -273,7 +285,10 @@ class TestDiff:
 class TestCommit:
     def test_writes_receipt_file(self, bc: BeancountConfiguration) -> None:
         result: ImportResult = ImportResult(
-            _make_vm(receipt_content=b"DID-WRITE-THIS"), _make_vm(receipt_content=b"DID-WRITE-THIS"), bc, "img.pdf"
+            _make_vm(receipt_content=b"DID-WRITE-THIS", filename="img.pdf"),
+            bc,
+            "img.pdf",
+            FetchedReceipt(b"DID-WRITE-THIS", 1700000000.5, "img.pdf"),
         )
         result.commit()
 
@@ -283,7 +298,7 @@ class TestCommit:
     def test_appends_transaction(
         self, tmp_path: pathlib.Path, bc: BeancountConfiguration
     ) -> None:
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
         result.commit()
 
         content: str = (tmp_path / "imported.bean").read_text(encoding="utf-8")
@@ -294,7 +309,7 @@ class TestCommit:
         self, tmp_path: pathlib.Path, bc: BeancountConfiguration
     ) -> None:
         initial_size: int = (tmp_path / "imported.bean").stat().st_size
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
         result.commit()
 
         assert result.rollback_size is not None
@@ -317,7 +332,7 @@ class TestCommitRefusesModifiedIngestionFile:
         ingest = tmp_path / "imported.bean"
         ingest.write_text('2025-01-01 * "Seed"\n', encoding="utf-8")
 
-        result = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
         # Read the current content, as run() does before prompting.
         result.diff()
 
@@ -344,7 +359,7 @@ class TestCommitRefusesModifiedIngestionFile:
         ingest = tmp_path / "imported.bean"
         ingest.write_text("", encoding="utf-8")
 
-        result = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
         result.diff()
         result.commit()  # must not raise
 
@@ -357,7 +372,10 @@ class TestCommitRollbackOnFailure:
         self, tmp_path: pathlib.Path, bc: BeancountConfiguration
     ) -> None:
         result: ImportResult = ImportResult(
-            _make_vm(receipt_content=b"DID-WRITE-THIS"), _make_vm(receipt_content=b"DID-WRITE-THIS"), bc, "img.pdf"
+            _make_vm(receipt_content=b"DID-WRITE-THIS", filename="img.pdf"),
+            bc,
+            "img.pdf",
+            FetchedReceipt(b"DID-WRITE-THIS", 1700000000.5, "img.pdf"),
         )
 
         with mock.patch("pathlib.Path.write_bytes", side_effect=IOError("disk full")):
@@ -373,7 +391,7 @@ class TestCommitRollbackOnFailure:
     def test_ingest_write_failure_deletes_receipt(
         self, bc: BeancountConfiguration
     ) -> None:
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
 
         # Make file unwritable.
         os.chmod(result.ingestion_destination_path, 000)
@@ -387,7 +405,7 @@ class TestCommitRollbackOnFailure:
     ) -> None:
         initial_size: int = (tmp_path / "imported.bean").stat().st_size
 
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
         result.commit()
         assert result.rollback_size is not None
 
@@ -410,7 +428,7 @@ class TestRollback:
         bc: BeancountConfiguration = _make_config(folder)
         vm: mock.MagicMock = _make_vm()
 
-        result: ImportResult = ImportResult(vm, vm, bc, "test.pdf")
+        result: ImportResult = ImportResult(vm, bc, "test.pdf", SAMPLE_FETCHED)
 
         # Make receipt file exist so rollback attempts to delete it.
         result.receipt_destination_path.parent.mkdir(parents=True, exist_ok=True)
@@ -445,7 +463,7 @@ class TestRollback:
             ingestion_destination_file=pathlib.Path("ingest.bean"),
         )
 
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
         result.ingestion_destination_path = ingest_path
         result.rollback_size = len(content_before.encode("utf-8"))
 
@@ -466,7 +484,7 @@ class TestRollback:
         original_text: str = "line one\nline two\n"
         ingest: pathlib.Path = tmp_path / "imported.bean"
 
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
         ingest.write_text(original_text)
         result.rollback_size = len(original_text.encode("utf-8"))
 
@@ -479,7 +497,7 @@ class TestRollback:
         assert ingest.read_text() == original_text
 
     def test_raises_when_receipt_unlink_fails(self, bc: BeancountConfiguration) -> None:
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
 
         # Ensure the receipt exists so unlink is attempted.
         result.receipt_destination_path.parent.mkdir(parents=True, exist_ok=True)
@@ -504,7 +522,7 @@ class TestRollback:
             ingestion_destination_file=pathlib.Path("ingest.bean"),
         )
 
-        result: ImportResult = ImportResult(_make_vm(), _make_vm(), bc, "test.pdf")
+        result: ImportResult = ImportResult(_make_vm(), bc, "test.pdf", SAMPLE_FETCHED)
         result.ingestion_destination_path = ingest_file
         result.rollback_size = len(ingest_content.encode("utf-8"))
         result.receipt_destination_path = tmp_path / "nope"

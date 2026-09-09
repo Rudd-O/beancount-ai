@@ -19,25 +19,41 @@ def load_json(s: str | bytes) -> Any:
         raise BadJSON(e.msg, s if isinstance(s, str) else s.decode("utf-8"), e.pos)
 
 
+FILE_NOT_FOUND_ERROR = "file not found"
+
+
 @dataclass
 class FetchedReceipt:
     """A receipt file as returned by the server's ``beanhand.Fetch`` subcommand.
 
     Combines the raw bytes of the document with the modification timestamp the
     server knows about, so callers can preserve it when saving the file locally.
+
+    ``filename`` is the receipt's basename; it defaults to the empty string so
+    the wire parser (which reads only data + timestamp) is unchanged, and the
+    client sets it both when it fetches a receipt from the store and when it
+    reads one from a local file (so ``save_receipt`` / ``preview_receipt`` can
+    name the destination without a second fetch).
     """
 
     data: bytes
     timestamp: float
+    filename: str = ""
 
     @classmethod
-    def load(cls, f: IO[bytes]) -> "FetchedReceipt":
+    def load(cls, filename: str, f: IO[bytes]) -> "FetchedReceipt":
         raw = f.read()
 
         # The server sends one JSONL metadata line, then the raw bytes of the
         # receipt.  Partition on the first newline to separate the two.
         meta, _, data = raw.partition(b"\n")
-        timestamp = cast(float, load_json(meta)["timestamp"])
+        meta = load_json(meta)
+        if "error" in meta:
+            if meta["error"] == FILE_NOT_FOUND_ERROR:
+                raise FileNotFoundError(filename)
+            else:
+                raise Exception(meta["error"])
+        timestamp = cast(float, meta["timestamp"])
         return cls(data, timestamp)
 
 

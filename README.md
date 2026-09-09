@@ -116,13 +116,13 @@ beanhand list-uningested        # receipts not yet imported
 beanhand list-unassociated      # receipts not yet linked to a transaction
 ```
 
-**Import uningested receipts interactively**.  To import scanned receipts (and possibly preview them as you go):
+**Import uningested receipts interactively**.  To create transactions from scanned receipts (and possibly preview them as you go):
 
 ```bash
 beanhand ingest
 ```
 
-**Associate receipts with existing transactions**:
+**Associate receipts with existing transactions**.  To let `beanhand` organize receipts into transactions you've already recorded:
 
 ```bash
 beanhand associate
@@ -147,16 +147,19 @@ Find a reference to all subcommands in the [Commands](docs/Commands.md) document
 
 ### Feeding receipts to `beanhand`
 
-`beanhand` can obtain receipts from **local folders on your computer**, or
-on a **WebDAV** server.  You'll need to configure two distinct folders:
+`beanhand` can obtain receipts from a variety of sources.  In any case, you'll need to designate two distinct folders for specific purposes — think of them as receipt inboxes:
 
-1. An uningested receipts folder; `beanhand ingest` can import (as transactions) and file for you.
-2. An unassociated receipts folder; `beanhand associate` can look at them, decide which transaction each belongs to, and file them.
+1. An uningested receipts folder; `beanhand ingest` looks here for receipts to import as transactions, then file with the imported transactions.
+2. An unassociated receipts folder; `beanhand associate` looks here by default for receipts to analyze and file with their corresponding transactions.
 
 Those folders can be stored:
 
-* In your computer; you manually drop files in them, or use something like Syncthing or Dropbox to feed them from your phone.
-* In a WebDAV server such as a Nextcloud instance; upload receipts on the Web or via your phone, and `beanhand` can see them.
+ * In your computer; you manually drop files in them, or use something like Syncthing or Dropbox to feed them from your phone.
+ * In a WebDAV server such as a Nextcloud instance; upload receipts on the Web or via your phone, and `beanhand` can see them.
+
+`beanhand` can also read receipts straight from any folder in your computer.  Any of `process`, `import`, `ingest`, `associate`, or `organize` can get (as an argument) the full path to a file (e.g. `beanhand ingest scans/2026-01-01.jpg`); `beanhand` reads that file directly instead of accessing the designated folders.
+
+A successful `ingest` or `associate` moves the receipt into the corresponding account folder (preserving its original timestamp and adding some metadata to the file name); this prevents clutter in your receipts folders and avoids having to re-analyze already-processed receipts.  `import` and `organize` copy the receipt but leave the original alone.
 
 ### Batch operation
 
