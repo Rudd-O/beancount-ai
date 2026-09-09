@@ -48,6 +48,8 @@ beanhand/
     └── display.py                             # colored unified-diff printing
 ```
 
+## Quality assurance
+
 Tox (`tox --current-env`) is the test framework; it runs doctests, pytest, Ruff and MyPy.
 You can invoke the entire suite of tests using command `make qa`.  If you are iterating
 through code changes, first run `pytest -vv` in the project directory to verify much more
@@ -116,11 +118,18 @@ the subcommand joined with a plus sign to the hex-encoded argument (if needed by
 
 Client has the ability to send stdin to server, and server can respond via stdout.
 
+## How to do the best work within this project
+
+When implementing a requested change, always update all (user and engineering) documentation that became obsolete due that change.
+
+Code changes that require testing should be first tested with `pytest` because it's the most efficient way to detect problems — `tox.ini` contains the command used in this project to run it.  Towards the end of the implementation, `make qa` will run the full battery of tests.
+
 ## Key files (do not change without checking spec)
 
 - `RECEIPT_CONVERSION_PROMPT.md` — tested LLM prompt for receipt→Beancount conversion. Do not modify without verifying against docs/specs.
 - `RECEIPT_INFO_PROMPT.md` — also do not change, it's manually tested.
 - `RECEIPT_MATCH_PROMPT.md` — same.  Do not change.
+- `TRANSACTION_REFINEMENT_PROMPT.md` — same.  Do not change.
 
 ## Gotchas
 
